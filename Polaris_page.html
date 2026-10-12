@@ -1,0 +1,3078 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>POLARIS - Tactical Command Interface</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --header-height: clamp(38px, 4.5vh, 46px);
+            --base-font-size: clamp(11px, 1.2vw, 14px);
+            --bubble-max-width: clamp(60%, 70vw, 75%);
+            --dropdown-width: 400px;
+            /* (display-size) whole-page scale multiplier, driven by the nav ⋯ slider (70%–150%) */
+            --ui-scale: 1;
+        }
+        body { font-family: 'Segoe UI', 'Roboto', monospace; background: radial-gradient(ellipse at center, #0a0e14 0%, #05080d 100%); color: #00e5ff; min-height: 100vh; overflow: hidden; font-size: var(--base-font-size); /* (display-size) HDI-style: one dial scales the entire page */ zoom: var(--ui-scale); }
+        .grid-bg { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-image: linear-gradient(rgba(0, 229, 255, 0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 229, 255, 0.03) 1px, transparent 1px), radial-gradient(circle at 50% 50%, rgba(0, 130, 240, 0.08) 0%, transparent 60%); background-size: 50px 50px, 50px 50px, 100% 100%; animation: gridMove 30s linear infinite; z-index: -1; }
+        @keyframes gridMove { 0% { transform: perspective(1000px) rotateX(60deg) translateY(0) scale(1); } 100% { transform: perspective(1000px) rotateX(60deg) translateY(50px) scale(1); } }
+        .scanlines { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: repeating-linear-gradient(0deg, rgba(0, 229, 255, 0.02) 0px, transparent 2px, transparent 4px, rgba(0, 229, 255, 0.02) 6px); pointer-events: none; z-index: 1000; }
+        .nav-bar { position: fixed; top: 0; left: 0; right: 0; /* (display-size) ÷ --ui-scale keeps the compact bar viewport-exact under body zoom */ height: calc(var(--header-height) / var(--ui-scale)); background: rgba(10, 14, 18, 0.95); border-bottom: 1px solid rgba(0, 229, 255, 0.4); display: flex; align-items: center; justify-content: space-between; padding: 0 14px; z-index: 100; box-shadow: 0 3px 18px rgba(0, 229, 255, 0.15); }
+        .nav-left { display: flex; align-items: center; gap: 10px; }
+        .logo { display: flex; align-items: center; gap: 8px; }
+        .logo-icon { width: clamp(22px, 2.5vw, 28px); height: clamp(22px, 2.5vw, 28px); background: linear-gradient(135deg, rgba(0, 229, 255, 0.3) 0%, rgba(0, 130, 240, 0.2) 100%); border: 1px solid rgba(0, 229, 255, 0.6); border-radius: 50%; position: relative; box-shadow: 0 0 12px rgba(0, 229, 255, 0.35); }
+        .logo-icon::before { content: ""; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 60%; height: 60%; background: radial-gradient(circle, rgba(0, 229, 255, 0.8) 0%, transparent 70%); border-radius: 50%; }
+        .logo-text { font-size: clamp(13px, 1.5vw, 15px); font-weight: 700; letter-spacing: 2px; background: linear-gradient(135deg, #00e5ff 0%, #00aaff 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; text-shadow: 0 0 12px rgba(0, 229, 255, 0.4); }
+        .nav-menu { display: flex; gap: 5px; }
+        .nav-item { position: relative; }
+        .radar-status-indicator { width: 7px; height: 7px; border-radius: 50%; background: rgba(255, 100, 100, 0.3); border: 1px solid rgba(255, 100, 100, 0.6); margin-left: 6px; transition: all 0.3s ease; }
+        .radar-status-indicator.active { background: rgba(0, 229, 255, 0.6); border-color: rgba(0, 229, 255, 0.9); box-shadow: 0 0 10px rgba(0, 229, 255, 0.5); }
+        #radarCanvas { display: block; margin: 0 auto; }
+        .radar-sweep { position: absolute; top: 50%; left: 50%; width: 50%; height: 2px; background: linear-gradient(90deg, rgba(0, 229, 255, 0.8), transparent); transform-origin: left center; animation: radarSweep 2s linear infinite; pointer-events: none; }
+        @keyframes radarSweep { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .user-selector { display: flex; align-items: center; gap: 10px; background: rgba(15, 23, 32, 0.4); border: 1px solid rgba(0, 229, 255, 0.4); padding: 8px 15px; border-radius: 8px; margin-right: 20px; }
+        .user-selector label { font-size: clamp(9px, 1vw, 11px); letter-spacing: 1px; color: rgba(0, 229, 255, 0.7); }
+        .user-selector select { background: rgba(15, 23, 32, 0.4); border: 1px solid rgba(0, 229, 255, 0.4); color: #00e5ff; padding: 3px 8px; border-radius: 5px; font-size: clamp(9px, 1vw, 10px); cursor: pointer; }
+        .nav-btn { background: linear-gradient(135deg, rgba(0, 130, 240, 0.3) 0%, rgba(0, 70, 155, 0.2) 100%); border: 1px solid rgba(0, 229, 255, 0.4); color: #00e5ff; padding: 4px 10px; font-size: clamp(9px, 1vw, 10px); letter-spacing: 1px; cursor: pointer; border-radius: 6px; transition: all 0.3s ease; text-transform: uppercase; }
+        .nav-btn:hover { background: linear-gradient(135deg, rgba(0, 185, 255, 0.5) 0%, rgba(0, 105, 200, 0.3) 100%); box-shadow: 0 0 20px rgba(0, 229, 255, 0.4); transform: translateY(-2px); }
+        .nav-btn.active { background: linear-gradient(135deg, rgba(0, 215, 255, 0.5) 0%, rgba(0, 125, 215, 0.4) 100%); border-color: rgba(0, 229, 255, 0.8); box-shadow: 0 0 25px rgba(0, 229, 255, 0.6); }
+        .dropdown { position: absolute; top: 100%; right: 0; background: rgba(10, 14, 18, 0.98); border: 2px solid rgba(0, 229, 255, 0.4); border-radius: 12px; padding: 12px; min-width: var(--dropdown-width); max-height: 65vh; overflow-y: auto; opacity: 0; visibility: hidden; transform: translateY(-10px); transition: all 0.3s ease; box-shadow: 0 10px 40px rgba(0, 229, 255, 0.3); z-index: 210; }
+        .dropdown.active { opacity: 1; visibility: visible; transform: translateY(10px); }
+        .dropdown::before { content: ""; position: absolute; top: -8px; right: 20px; width: 16px; height: 16px; background: rgba(10, 14, 18, 0.98); border-left: 2px solid rgba(0, 229, 255, 0.4); border-top: 2px solid rgba(0, 229, 255, 0.4); transform: rotate(45deg); }
+        .dropdown-header { font-size: clamp(12px, 1.5vw, 14px); font-weight: 700; letter-spacing: 2px; padding-bottom: 10px; margin-bottom: 15px; border-bottom: 1px solid rgba(0, 229, 255, 0.3); color: #00e5ff; text-transform: uppercase; display: flex; justify-content: space-between; align-items: center; }
+        .dropdown-close { width: 24px; height: 24px; background: rgba(0, 130, 240, 0.3); border: 1px solid rgba(0, 229, 255, 0.5); border-radius: 50%; color: #00e5ff; font-size: 16px; line-height: 22px; text-align: center; cursor: pointer; transition: all 0.3s ease; }
+        .dropdown-close:hover { background: rgba(0, 185, 255, 0.5); box-shadow: 0 0 15px rgba(0, 229, 255, 0.6); transform: rotate(90deg); }
+        .dropdown-section { margin-bottom: 15px; }
+        .dropdown-stat-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(0, 229, 255, 0.1); }
+        .dropdown-stat-label { color: rgba(0, 229, 255, 0.7); letter-spacing: 1px; }
+        .dropdown-stat-value { color: #00e5ff; font-weight: 700; }
+        .sliding-window-display { max-height: 150px; overflow-y: auto; background: rgba(15, 23, 32, 0.2); border: 1px solid rgba(0, 229, 255, 0.2); border-radius: 8px; padding: 10px; font-size: clamp(9px, 1vw, 11px); }
+        .sliding-window-display div { padding: 3px 0; border-bottom: 1px solid rgba(0, 229, 255, 0.1); }
+        .memory-tab-btn { background: rgba(0, 130, 240, 0.2); border: 1px solid rgba(0, 229, 255, 0.3); color: rgba(0, 229, 255, 0.7); padding: 6px 12px; font-size: 9px; letter-spacing: 1px; cursor: pointer; border-radius: 6px; transition: all 0.3s ease; text-transform: uppercase; }
+        .memory-tab-btn:hover { background: rgba(0, 185, 255, 0.3); color: #00e5ff; }
+        .memory-tab-btn.active { background: rgba(0, 215, 255, 0.4); border-color: rgba(0, 229, 255, 0.6); color: #00e5ff; box-shadow: 0 0 10px rgba(0, 229, 255, 0.3); }
+        .memory-tab-content { display: none; margin-top: 10px; }
+        .memory-tab-content.active { display: block; }
+        .connection-status { display: flex; align-items: center; gap: 8px; padding: 4px 10px; background: rgba(15, 23, 32, 0.3); border: 1px solid rgba(0, 229, 255, 0.3); border-radius: 16px; font-size: clamp(8px, 0.9vw, 10px); letter-spacing: 2px; }
+        .status-indicator { width: 7px; height: 7px; border-radius: 50%; background: rgba(255, 100, 100, 0.5); box-shadow: 0 0 8px rgba(255, 100, 100, 0.5); transition: all 0.3s ease; }
+        .status-indicator.online { background: rgba(0, 255, 100, 0.8); box-shadow: 0 0 15px rgba(0, 255, 100, 0.8); }
+        .chat-container { flex: 1; display: flex; flex-direction: column; padding: 10px 14px; overflow: hidden; }
+        .chat-section { display: flex; flex-direction: column; max-width: 1200px; margin: 0 auto; width: 100%; height: 100%; }
+        .chat-input-section { flex: 0 0 auto; margin-bottom: 8px; }
+        .chat-messages { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 12px; background: rgba(12, 18, 26, 0.3); border: 1px solid rgba(0, 229, 255, 0.2); border-radius: 12px; display: flex; flex-direction: column; min-height: 0; }
+        .message-bubble { max-width: var(--bubble-max-width); margin-bottom: 8px; padding: 8px 12px; border-radius: 12px; animation: fadeIn 0.3s ease; position: relative; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .message-bubble.user { background: linear-gradient(135deg, rgba(0, 185, 255, 0.3) 0%, rgba(0, 105, 200, 0.2) 100%); border: 1px solid rgba(0, 215, 255, 0.4); margin-left: auto; }
+        .message-bubble.ai { background: linear-gradient(135deg, rgba(18, 28, 40, 0.3) 0%, rgba(0, 55, 115, 0.2) 100%); border: 1px solid rgba(0, 185, 255, 0.4); }
+        .message-sender { font-size: clamp(8px, 0.9vw, 10px); letter-spacing: 1px; color: rgba(0, 229, 255, 0.7); margin-bottom: 5px; text-transform: uppercase; }
+        .message-content { font-size: clamp(11px, 1.3vw, 13px); line-height: 1.5; }
+        .message-audio-controls { display: flex; gap: 8px; margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(0, 229, 255, 0.2); align-items: center; }
+        .audio-play-btn { background: rgba(0, 185, 255, 0.3); border: 1px solid rgba(0, 229, 255, 0.5); color: #00e5ff; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 12px; transition: all 0.2s ease; flex-shrink: 0; }
+        .audio-play-btn:hover { background: rgba(0, 215, 255, 0.5); box-shadow: 0 0 15px rgba(0, 229, 255, 0.4); transform: scale(1.1); }
+        .audio-close-btn { background: rgba(255, 100, 100, 0.2); border: 1px solid rgba(255, 100, 100, 0.4); color: rgba(255, 100, 100, 0.8); width: 24px; height: 24px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 14px; transition: all 0.2s ease; flex-shrink: 0; margin-left: auto; }
+        .audio-close-btn:hover { background: rgba(255, 100, 100, 0.4); box-shadow: 0 0 12px rgba(255, 100, 100, 0.5); transform: scale(1.1); }
+        .chat-input-section { display: flex; flex-direction: column; gap: 8px; padding: 10px; background: rgba(10, 14, 18, 0.8); border: 1px solid rgba(0, 229, 255, 0.3); border-radius: 10px; }
+        .operator-select { display: flex; align-items: center; gap: 10px; }
+        .operator-select label { font-size: clamp(9px, 1vw, 11px); letter-spacing: 1px; color: rgba(0, 229, 255, 0.7); }
+        .operator-select select { background: rgba(15, 23, 32, 0.4); border: 1px solid rgba(0, 229, 255, 0.4); color: #00e5ff; padding: 6px 12px; border-radius: 6px; font-size: clamp(10px, 1.1vw, 12px); cursor: pointer; }
+        .input-row { display: flex; gap: 10px; }
+        .message-input { flex: 1; background: rgba(15, 23, 32, 0.3); border: 1px solid rgba(0, 229, 255, 0.3); border-radius: 8px; padding: 8px 12px; color: #00e5ff; font-size: clamp(10px, 1.1vw, 12px); font-family: inherit; }
+        .message-input:focus { outline: none; border-color: rgba(0, 229, 255, 0.6); box-shadow: 0 0 15px rgba(0, 229, 255, 0.2); }
+        .send-btn { background: linear-gradient(135deg, rgba(0, 185, 255, 0.4) 0%, rgba(0, 105, 200, 0.3) 100%); border: 1px solid rgba(0, 229, 255, 0.5); color: #00e5ff; padding: 8px 14px; border-radius: 8px; font-size: clamp(10px, 1.1vw, 12px); letter-spacing: 1px; cursor: pointer; transition: all 0.3s ease; text-transform: uppercase; }
+        .send-btn:hover { background: linear-gradient(135deg, rgba(0, 215, 255, 0.6) 0%, rgba(0, 125, 215, 0.4) 100%); box-shadow: 0 0 20px rgba(0, 229, 255, 0.4); transform: translateY(-2px); }
+        .audio-control { display: flex; justify-content: flex-end; padding-top: 6px; border-top: 1px solid rgba(0, 229, 255, 0.15); }
+        .toggle-label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: clamp(9px, 1vw, 11px); letter-spacing: 1px; color: rgba(0, 229, 255, 0.7); user-select: none; }
+        .toggle-label input[type="checkbox"] { display: none; }
+        .toggle-text { position: relative; padding-left: 20px; }
+        .toggle-text::before { content: ""; position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; border: 1px solid rgba(0, 229, 255, 0.4); border-radius: 3px; background: rgba(15, 23, 32, 0.3); transition: all 0.3s ease; }
+        .toggle-text::after { content: ""; position: absolute; left: 3px; top: 50%; transform: translateY(-50%); width: 8px; height: 8px; border-radius: 2px; background: rgba(0, 229, 255, 0.8); opacity: 0; transition: opacity 0.3s ease; box-shadow: 0 0 8px rgba(0, 229, 255, 0.6); }
+        .toggle-label input[type="checkbox"]:checked + .toggle-text::before { border-color: rgba(0, 229, 255, 0.8); background: rgba(0, 229, 255, 0.2); }
+        .toggle-label input[type="checkbox"]:checked + .toggle-text::after { opacity: 1; }
+        #ttsPlayer { width: 100%; margin-top: 6px; border-radius: 6px; border: 1px solid rgba(0, 229, 255, 0.3); background: rgba(12, 18, 26, 0.5); }
+        #ttsPlayer::-webkit-media-controls-panel { background: rgba(15, 23, 32, 0.4); }
+        #ttsPlayer::-webkit-media-controls-play-button { filter: hue-rotate(180deg); }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: rgba(12, 18, 26, 0.3); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb { background: rgba(0, 185, 255, 0.4); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(0, 215, 255, 0.6); }
+        /* ============== HOLODECK SPLIT-VIEW LAYOUT ============== */
+        .holodeck-container {
+            display: flex;
+            flex-direction: column;
+            /* (LGI HUD fix) was 100vh + margin-top → deck tail ran off-screen by the header height */
+            /* (display-size) ÷ --ui-scale compensation keeps the deck viewport-exact at any slider value */
+            height: calc((100vh - var(--header-height)) / var(--ui-scale));
+            margin-top: calc(var(--header-height) / var(--ui-scale));
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .holodeck-top-section {
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            transition: all 0.3s ease;
+        }
+        
+        .holodeck-bottom-section {
+            /* (v4.6.1 split dial) operator default TACTICAL 70% / chat 30%; drag range 30%–70% so
+               chat can become the dominant pane (up to 70/30). Drag writes inline flex-basis — a
+               definite flex-basis shadows height (the old style.height drag was a silent no-op).
+               Position persists in localStorage['polaris_split']. */
+            flex: 0 0 70%;
+            min-height: 180px;
+            max-height: 88%;
+            background: rgba(7, 10, 15, 0.95);
+            border-top: 2px solid rgba(0, 229, 255, 0.4);
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            overflow-x: hidden;
+            transition: all 0.3s ease;
+        }
+        
+        .holodeck-bottom-section.collapsed {
+            flex-basis: 0 !important;
+            height: 0 !important;
+            min-height: 0 !important;
+            border-top: none;
+            overflow: hidden;
+        }
+        
+        .resize-handle {
+            height: 8px;
+            background: rgba(10, 14, 18, 0.8);
+            border-top: 1px solid rgba(0, 229, 255, 0.3);
+            border-bottom: 1px solid rgba(0, 229, 255, 0.3);
+            cursor: ns-resize;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            flex-shrink: 0;
+            z-index: 10;
+            transition: all 0.2s ease;
+        }
+        
+        .resize-handle:hover {
+            background: rgba(10, 16, 24, 0.9);
+            border-color: rgba(0, 229, 255, 0.6);
+            box-shadow: 0 0 15px rgba(0, 229, 255, 0.3);
+        }
+        
+        .resize-grip {
+            display: flex;
+            gap: 3px;
+        }
+        
+        .resize-grip span {
+            width: 3px;
+            height: 3px;
+            background: rgba(0, 229, 255, 0.5);
+        }
+        
+        .holodeck-bottom-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 12px;
+            background: rgba(12, 18, 26, 0.6);
+            border-bottom: 1px solid rgba(0, 229, 255, 0.2);
+            flex-shrink: 0;
+        }
+        
+        .holodeck-bottom-title {
+            font-size: 11px;
+            letter-spacing: 1px;
+            color: rgba(0, 229, 255, 0.8);
+            text-transform: uppercase;
+        }
+        
+        .holodeck-tabs {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .holodeck-tab-btn {
+            background: rgba(15, 23, 32, 0.3);
+            border: 1px solid rgba(0, 229, 255, 0.3);
+            color: rgba(0, 229, 255, 0.6);
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 9px;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+        }
+        
+        .holodeck-tab-btn:hover {
+            background: rgba(18, 28, 40, 0.4);
+            border-color: rgba(0, 229, 255, 0.5);
+            color: #00e5ff;
+        }
+        
+        .holodeck-tab-btn.active {
+            background: rgba(0, 185, 255, 0.4);
+            border-color: rgba(0, 229, 255, 0.7);
+            color: #00e5ff;
+            box-shadow: 0 0 10px rgba(0, 229, 255, 0.3);
+        }
+        
+        .holodeck-content-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 15px;
+            display: none;
+        }
+        
+        .holodeck-content-area.active {
+            display: block;
+        }
+        .collapse-toggle {
+            position: absolute;
+            right: 20px;
+            top: -30px;
+            background: rgba(10, 14, 18, 0.9);
+            border: 1px solid rgba(0, 229, 255, 0.4);
+            color: #00e5ff;
+            padding: 6px 12px;
+            border-radius: 6px 6px 0 0;
+            cursor: pointer;
+            font-size: 11px;
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s ease;
+            z-index: 20;
+        }
+        /* Task Feed Styles */
+        .task-feed-container {
+            height: 100%;
+            overflow-y: auto;
+        }
+        
+        .task-feed-item {
+            background: rgba(15, 23, 32, 0.2);
+            border: 1px solid rgba(0, 229, 255, 0.2);
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            transition: all 0.2s ease;
+        }
+        
+        .task-feed-item:hover {
+            background: rgba(18, 28, 40, 0.3);
+            border-color: rgba(0, 229, 255, 0.4);
+        }
+        
+        .task-feed-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+        
+        .task-feed-icon.started {
+            background: rgba(0, 215, 255, 0.2);
+            border: 1px solid rgba(0, 215, 255, 0.5);
+            color: #33ddff;
+        }
+        
+        .task-feed-icon.completed {
+            background: rgba(0, 255, 136, 0.2);
+            border: 1px solid rgba(0, 255, 136, 0.5);
+            color: #00ff88;
+        }
+        
+        .task-feed-icon.failed {
+            background: rgba(255, 68, 68, 0.2);
+            border: 1px solid rgba(255, 68, 68, 0.5);
+            color: #ff4444;
+        }
+        
+        .task-feed-content {
+            flex: 1;
+            min-width: 0;
+        }
+        
+        .task-feed-title {
+            font-size: 11px;
+            letter-spacing: 1px;
+            color: rgba(0, 229, 255, 0.9);
+            margin-bottom: 4px;
+        }
+        
+        .task-feed-meta {
+            font-size: 10px;
+            color: rgba(0, 229, 255, 0.5);
+        }
+
+        
+        .collapse-toggle:hover {
+            background: rgba(10, 16, 24, 0.9);
+            border-color: rgba(0, 229, 255, 0.6);
+            box-shadow: 0 0 15px rgba(0, 229, 255, 0.3);
+        }
+
+        /* ============== DISPLAY SIZE (⋯ MENU) — whole-page scale 70–150% ============== */
+        .ui-scale-dropdown { min-width: 230px; }
+        .ui-scale-row { display: flex; align-items: center; gap: 10px; margin: 14px 0 10px; }
+        #uiScaleSlider { -webkit-appearance: none; appearance: none; flex: 1; height: 4px; background: rgba(0, 229, 255, 0.25); border-radius: 2px; outline: none; cursor: pointer; }
+        #uiScaleSlider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #00e5ff; box-shadow: 0 0 10px rgba(0, 229, 255, 0.8); cursor: pointer; }
+        #uiScaleSlider::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #00e5ff; border: none; box-shadow: 0 0 10px rgba(0, 229, 255, 0.8); cursor: pointer; }
+        #uiScaleSlider::-moz-range-track { height: 4px; background: rgba(0, 229, 255, 0.25); border-radius: 2px; }
+        .ui-scale-cap { font-size: 11px; color: rgba(0, 229, 255, 0.5); flex-shrink: 0; }
+        .ui-scale-value { font-size: clamp(9px, 1vw, 11px); letter-spacing: 1px; color: rgba(0, 229, 255, 0.85); margin-bottom: 10px; }
+        .ui-scale-actions { display: flex; justify-content: flex-end; }
+        #uiScaleBtn { font-size: 14px; line-height: 1; padding: 2px 11px; }
+
+    </style>
+</head>
+<body>
+    <script>try { var _p = parseFloat(localStorage.getItem('polaris_ui_scale')); if (!isFinite(_p)) _p = 100; _p = Math.max(70, Math.min(150, _p)); document.documentElement.style.setProperty('--ui-scale', (_p / 100).toFixed(2)); } catch (e) {}</script>
+    <div class="grid-bg"></div>
+    <style>
+        /* Memory Vault Styles */
+        .vault-container {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            gap: 15px;
+        }
+        
+        .vault-status-bar {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 10px;
+            background: rgba(12, 18, 26, 0.4);
+            border: 1px solid rgba(0, 229, 255, 0.2);
+            border-radius: 6px;
+            font-size: 11px;
+        }
+        
+        .vault-status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: rgba(255, 68, 68, 0.5);
+            border: 1px solid rgba(255, 68, 68, 0.7);
+            transition: all 0.3s ease;
+        }
+        
+        .vault-status-indicator.connected {
+            background: rgba(0, 255, 136, 0.6);
+            border-color: rgba(0, 255, 136, 0.9);
+            box-shadow: 0 0 10px rgba(0, 255, 136, 0.5);
+        }
+        
+        .vault-main-grid {
+            display: grid;
+            grid-template-columns: 340px 1fr;
+            gap: 15px;
+            flex: 1;
+            min-height: 0;
+        }
+        
+        .vault-list-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-height: 0;
+        }
+        
+        .vault-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .vault-select {
+            background: rgba(12, 18, 26, 0.5);
+            border: 1px solid rgba(0, 229, 255, 0.3);
+            border-radius: 4px;
+            padding: 6px 8px;
+            color: #00e5ff;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+        }
+        
+        .vault-search-input {
+            flex: 1;
+            min-width: 140px;
+            background: rgba(12, 18, 26, 0.5);
+            border: 1px solid rgba(0, 229, 255, 0.3);
+            border-radius: 4px;
+            padding: 6px 8px;
+            color: #00e5ff;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+        }
+        
+        .vault-select:focus,
+        .vault-search-input:focus {
+            outline: none;
+            border-color: rgba(0, 229, 255, 0.6);
+            box-shadow: 0 0 10px rgba(0, 229, 255, 0.2);
+        }
+        
+        .vault-btn {
+            background: rgba(15, 23, 32, 0.3);
+            border: 1px solid rgba(0, 229, 255, 0.3);
+            color: rgba(0, 229, 255, 0.8);
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 10px;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .vault-btn:hover {
+            background: rgba(0, 125, 200, 0.4);
+            border-color: rgba(0, 229, 255, 0.5);
+            color: #00e5ff;
+        }
+        
+        .vault-btn.danger {
+            border-color: rgba(255, 68, 68, 0.5);
+            color: rgba(255, 100, 100, 0.9);
+        }
+        
+        .vault-btn.danger:hover {
+            background: rgba(120, 20, 20, 0.4);
+            border-color: rgba(255, 68, 68, 0.8);
+            color: #ff8888;
+        }
+        
+        .vault-doc-list {
+            flex: 1;
+            background: rgba(10, 14, 18, 0.6);
+            border: 1px solid rgba(0, 229, 255, 0.2);
+            border-radius: 4px;
+            padding: 8px;
+            overflow-y: auto;
+            min-height: 120px;
+        }
+        
+        .vault-doc-item {
+            padding: 8px;
+            margin-bottom: 6px;
+            background: rgba(15, 23, 32, 0.2);
+            border-left: 2px solid rgba(0, 229, 255, 0.3);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .vault-doc-item:hover {
+            background: rgba(18, 28, 40, 0.3);
+        }
+        
+        .vault-doc-item.active {
+            background: rgba(0, 125, 200, 0.35);
+            border-left-color: #00e5ff;
+        }
+        
+        .vault-doc-title {
+            font-size: 11px;
+            color: rgba(0, 229, 255, 0.9);
+            margin-bottom: 3px;
+            word-break: break-word;
+        }
+        
+        .vault-doc-meta {
+            font-size: 9px;
+            color: rgba(0, 229, 255, 0.5);
+            margin-bottom: 3px;
+        }
+        
+        .vault-doc-snippet {
+            font-size: 10px;
+            color: rgba(0, 229, 255, 0.65);
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        
+        .vault-list-empty {
+            font-size: 10px;
+            color: rgba(0, 229, 255, 0.5);
+            padding: 8px;
+        }
+        
+        .vault-editor-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background: rgba(12, 18, 26, 0.3);
+            border: 1px solid rgba(0, 229, 255, 0.2);
+            border-radius: 6px;
+            padding: 12px;
+            min-height: 0;
+        }
+        
+        .vault-editor-header {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .vault-editor-title {
+            font-size: 13px;
+            font-weight: bold;
+            letter-spacing: 1px;
+            color: #00e5ff;
+            word-break: break-word;
+        }
+        
+        .vault-editor-meta {
+            font-size: 10px;
+            color: rgba(0, 229, 255, 0.55);
+            margin-top: 3px;
+            word-break: break-all;
+        }
+        
+        .vault-editor-actions {
+            margin-left: auto;
+            display: flex;
+            gap: 8px;
+        }
+        
+        .vault-editor-textarea {
+            flex: 1;
+            width: 100%;
+            background: rgba(10, 14, 18, 0.6);
+            border: 1px solid rgba(0, 229, 255, 0.2);
+            border-radius: 4px;
+            padding: 12px;
+            color: rgba(0, 229, 255, 0.85);
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            line-height: 1.5;
+            resize: none;
+        }
+        
+        .vault-editor-textarea:focus {
+            outline: none;
+            border-color: rgba(0, 229, 255, 0.6);
+            box-shadow: 0 0 10px rgba(0, 229, 255, 0.2);
+        }
+        
+        .vault-msg {
+            font-size: 10px;
+            min-height: 12px;
+            color: #00ff88;
+        }
+        
+        .vault-msg.error {
+            color: #ff4444;
+        }
+        
+        /* ============== LEARNING & HEURISTICS (LGI HUD port from Polaris_page.html.old) ============== */
+        #learningTab.active {
+            display: flex;
+            flex-direction: column;
+        }
+        .learning-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            flex-shrink: 0;
+            flex-wrap: wrap;
+        }
+        .learning-subtabs { display: flex; gap: 8px; }
+        .learning-subtab {
+            background: rgba(15, 23, 32, 0.3);
+            border: 1px solid rgba(0, 229, 255, 0.3);
+            color: rgba(0, 229, 255, 0.6);
+            padding: 5px 12px;
+            border-radius: 4px;
+            font-size: 10px;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+        }
+        .learning-subtab:hover {
+            background: rgba(18, 28, 40, 0.4);
+            border-color: rgba(0, 229, 255, 0.5);
+            color: #00e5ff;
+        }
+        .learning-subtab.active {
+            background: rgba(0, 185, 255, 0.4);
+            border-color: rgba(0, 229, 255, 0.7);
+            color: #00e5ff;
+            box-shadow: 0 0 10px rgba(0, 229, 255, 0.3);
+        }
+        .learning-toolbar-right {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .learning-counts {
+            font-size: 10px;
+            letter-spacing: 1px;
+            color: rgba(0, 229, 255, 0.6);
+            text-transform: uppercase;
+        }
+        .staged-rules-container, .live-memory-container {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding-top: 2px;
+        }
+        .rule-card {
+            background: rgba(12, 18, 26, 0.8);
+            border: 1px solid rgba(0, 229, 255, 0.2);
+            border-left: 3px solid #00e5ff;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 10px;
+            transition: all 0.2s ease;
+        }
+        .rule-card:hover {
+            border-color: rgba(0, 229, 255, 0.5);
+            transform: translateX(2px);
+            box-shadow: 0 0 12px rgba(0, 229, 255, 0.15);
+        }
+        .rule-card.live {
+            border-left-color: #00ff88;
+        }
+        .rule-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .rule-category {
+            padding: 3px 8px;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .rule-category.user_preference { background: rgba(255, 149, 0, 0.2); color: #ff9500; }
+        .rule-category.communication_style { background: rgba(0, 255, 136, 0.2); color: #00ff88; }
+        .rule-category.system_interaction { background: rgba(255, 71, 87, 0.2); color: #ff4757; }
+        .rule-category.task_execution { background: rgba(218, 112, 214, 0.2); color: #da70d6; }
+        .rule-confidence {
+            font-size: 11px;
+            color: rgba(155, 175, 195, 0.9);
+        }
+        .rule-confidence span {
+            color: #00e5ff;
+            font-weight: 600;
+        }
+        .rule-text {
+            font-size: 13px;
+            color: rgba(224, 230, 237, 0.95);
+            line-height: 1.5;
+            margin-bottom: 10px;
+        }
+        .rule-actions {
+            display: flex;
+            gap: 8px;
+        }
+        .rule-btn {
+            padding: 5px 12px;
+            border: none;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+        }
+        /* (rule buttons, empty state, modal and toast styles follow) */
+        .rule-btn-approve {
+            background: rgba(0, 255, 136, 0.2);
+            color: #00ff88;
+        }
+        .rule-btn-approve:hover {
+            background: rgba(0, 255, 136, 0.3);
+            box-shadow: 0 0 8px rgba(0, 255, 136, 0.3);
+        }
+        .rule-btn-reject {
+            background: rgba(255, 71, 87, 0.2);
+            color: #ff4757;
+        }
+        .rule-btn-reject:hover {
+            background: rgba(255, 71, 87, 0.3);
+            box-shadow: 0 0 8px rgba(255, 71, 87, 0.3);
+        }
+        .rule-btn-edit {
+            background: rgba(0, 229, 255, 0.2);
+            color: #00e5ff;
+        }
+        .rule-btn-edit:hover {
+            background: rgba(0, 229, 255, 0.3);
+            box-shadow: 0 0 8px rgba(0, 229, 255, 0.3);
+        }
+        .learning-empty {
+            text-align: center;
+            padding: 30px 20px;
+            color: rgba(107, 150, 180, 0.8);
+            font-size: 12px;
+        }
+        .learning-empty-icon {
+            font-size: 34px;
+            margin-bottom: 8px;
+            color: rgba(0, 229, 255, 0.6);
+        }
+        .edit-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            /* (display-size) explicit viewport dims ÷ scale — screen-exact under body zoom regardless of the browser's fixed-position zoom model */
+            width: calc(100vw / var(--ui-scale));
+            height: calc(100vh / var(--ui-scale));
+            background: rgba(2, 6, 10, 0.75);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            backdrop-filter: blur(6px);
+        }
+        .edit-modal {
+            background: rgba(10, 15, 22, 0.97);
+            border: 1px solid rgba(0, 229, 255, 0.35);
+            border-radius: 10px;
+            padding: 20px;
+            width: 460px;
+            max-width: 92vw;
+            box-shadow: 0 8px 40px rgba(0, 229, 255, 0.15);
+        }
+        .edit-modal-header {
+            font-size: 14px;
+            font-weight: 700;
+            color: #00e5ff;
+            margin-bottom: 18px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        .edit-modal-field {
+            margin-bottom: 14px;
+        }
+        .edit-modal-label {
+            display: block;
+            font-size: 11px;
+            font-weight: 600;
+            color: rgba(130, 155, 180, 0.9);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .edit-modal-textarea {
+            width: 100%;
+            box-sizing: border-box;
+            background: rgba(8, 12, 18, 0.9);
+            border: 1px solid rgba(0, 229, 255, 0.3);
+            border-radius: 6px;
+            padding: 10px;
+            color: rgba(0, 229, 255, 0.9);
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            resize: vertical;
+            min-height: 80px;
+            outline: none;
+        }
+        .edit-modal-textarea:focus,
+        .edit-modal-select:focus,
+        .edit-modal-input:focus {
+            border-color: #00e5ff;
+            box-shadow: 0 0 10px rgba(0, 229, 255, 0.3);
+        }
+        .edit-modal-select,
+        .edit-modal-input {
+            width: 100%;
+            box-sizing: border-box;
+            background: rgba(8, 12, 18, 0.9);
+            border: 1px solid rgba(0, 229, 255, 0.3);
+            border-radius: 6px;
+            padding: 8px 10px;
+            color: rgba(0, 229, 255, 0.9);
+            font-size: 12px;
+            outline: none;
+        }
+        .edit-modal-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 18px;
+        }
+        .edit-modal-btn {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+        }
+        .edit-modal-btn-save {
+            background: rgba(0, 229, 255, 0.2);
+            color: #00e5ff;
+        }
+        .edit-modal-btn-save:hover {
+            background: rgba(0, 229, 255, 0.3);
+        }
+        .edit-modal-btn-cancel {
+            background: rgba(107, 122, 143, 0.2);
+            color: rgba(160, 175, 195, 0.9);
+        }
+        .edit-modal-btn-cancel:hover {
+            background: rgba(107, 122, 143, 0.3);
+        }
+        .rule-toast {
+            position: fixed;
+            bottom: 30px;
+            right: 20px;
+            background: rgba(10, 15, 22, 0.97);
+            border: 1px solid rgba(0, 229, 255, 0.35);
+            border-left: 4px solid #00e5ff;
+            border-radius: 8px;
+            padding: 12px 18px;
+            color: rgba(224, 230, 237, 0.95);
+            font-size: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            animation: ruleToastIn 0.25s ease-out;
+            z-index: 1001;
+        }
+        .rule-toast.success { border-left-color: #00ff88; }
+        .rule-toast.error { border-left-color: #ff4444; }
+        @keyframes ruleToastIn {
+            from { transform: translateX(30px); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+    </style>
+
+    <div class="scanlines"></div>
+    <nav class="nav-bar">
+        <div class="nav-left">
+            <div class="logo">
+                <div class="logo-icon"></div>
+                <div class="logo-text">POLARIS</div>
+            </div>
+            <div class="user-selector">
+                <label>USER:</label>
+                <select id="navUserSelect" onchange="changeUser()">
+                    <option value="rich">RICH</option>
+                    <option value="matt">MATT</option>
+                </select>
+            </div>
+            <div class="nav-menu">
+                <div class="nav-item">
+                    <button class="nav-btn" onclick="toggleDropdown('chatHistory')">Chat History</button>
+                    <div class="dropdown" id="chatHistoryDropdown">
+                        <div class="dropdown-header">
+                            <span>Session Diagnostics</span>
+                            <div class="dropdown-close" onclick="toggleDropdown('chatHistory')">&times;</div>
+                        </div>
+                        <div class="dropdown-section">
+                            <div class="dropdown-stat-row"><span class="dropdown-stat-label">SESSION ID</span><span class="dropdown-stat-value" id="sessionId">--</span></div>
+                            <div class="dropdown-stat-row"><span class="dropdown-stat-label">ACTIVE USER</span><span class="dropdown-stat-value" id="activeUser">--</span></div>
+                            <div class="dropdown-stat-row"><span class="dropdown-stat-label">MESSAGES</span><span class="dropdown-stat-value" id="messageCount">0</span></div>
+                            <div class="dropdown-stat-row"><span class="dropdown-stat-label">DURATION</span><span class="dropdown-stat-value" id="sessionDuration">00:00</span></div>
+                        </div>
+                        <div class="dropdown-section">
+                            <div class="dropdown-header" style="font-size: 11px; margin-top: 15px;">Sliding Window</div>
+                            <div class="sliding-window-display" id="slidingWindowDisplay"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="nav-item">
+                    <button class="nav-btn" onclick="toggleDropdown('memory')">Memory</button>
+                    <div class="dropdown" id="memoryDropdown">
+                        <div class="dropdown-header">
+                            <span>Memory Architecture</span>
+                            <div class="dropdown-close" onclick="toggleDropdown('memory')">&times;</div>
+                        </div>
+                        <div class="dropdown-section">
+                            <div class="dropdown-header" style="font-size: 11px; margin-top: 0;">SQLite Memory</div>
+                            <div class="dropdown-stat-row"><span class="dropdown-stat-label">USERS</span><span class="dropdown-stat-value" id="sqliteUsers">0</span></div>
+                            <div class="dropdown-stat-row"><span class="dropdown-stat-label">MESSAGES</span><span class="dropdown-stat-value" id="sqliteMessages">0</span></div>
+                            <div class="dropdown-stat-row"><span class="dropdown-stat-label">HEURISTICS</span><span class="dropdown-stat-value" id="sqliteHeuristics">0</span></div>
+                            <div class="dropdown-stat-row"><span class="dropdown-stat-label">OPS/SEC</span><span class="dropdown-stat-value" id="sqliteOpsSec">0</span></div>
+                        </div>
+                        <div class="dropdown-section">
+                            <div class="dropdown-header" style="font-size: 11px; margin-top: 0;">ChromaDB</div>
+                            <div style="display: flex; gap: 5px; margin-bottom: 10px;">
+                                <button class="memory-tab-btn active" data-tab="global" onclick="switchMemoryTab('global')">GLOBAL</button>
+                                <button class="memory-tab-btn" data-tab="user" onclick="switchMemoryTab('user')">USER</button>
+                                <button class="memory-tab-btn" data-tab="context" onclick="switchMemoryTab('context')">CONTEXT</button>
+                            </div>
+                            <div class="memory-tab-content active" id="globalTab">
+                                <div class="dropdown-stat-row"><span class="dropdown-stat-label">VECTORS</span><span class="dropdown-stat-value" id="chromaGlobal">0</span></div>
+                            </div>
+                            <div class="memory-tab-content" id="userTab">
+                                <div class="dropdown-stat-row"><span class="dropdown-stat-label">VECTORS</span><span class="dropdown-stat-value" id="chromaUser">0</span></div>
+                            </div>
+                            <div class="memory-tab-content" id="contextTab">
+                                <div class="dropdown-stat-row"><span class="dropdown-stat-label">VECTORS</span><span class="dropdown-stat-value" id="chromaContext">0</span></div>
+                            </div>
+                            <div class="dropdown-stat-row" style="margin-top: 10px;"><span class="dropdown-stat-label">OPS/SEC</span><span class="dropdown-stat-value" id="chromaOpsSec">0</span></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="nav-item">
+                    <button class="nav-btn" onclick="toggleDropdown('radar')">Radar <div class="radar-status-indicator" id="radarStatusIndicator"></div></button>
+                    <div class="dropdown" id="radarDropdown">
+                        <div class="dropdown-header">
+                            <span>CSI Radar Tracking</span>
+                            <div class="dropdown-close" onclick="toggleDropdown('radar')">&times;</div>
+                        </div>
+                        <div class="dropdown-section">
+                            <div style="text-align: center; margin-bottom: 10px;">
+                                <canvas id="radarCanvas" width="350" height="350" style="border: 1px solid rgba(0, 229, 255, 0.3); border-radius: 50%; background: rgba(10, 14, 18, 0.5);"></canvas>
+                            </div>
+                            <div class="dropdown-stat-row"><span class="dropdown-stat-label">POSITION X</span><span class="dropdown-stat-value" id="radarPosX">0.00</span></div>
+                            <div class="dropdown-stat-row"><span class="dropdown-stat-label">POSITION Y</span><span class="dropdown-stat-value" id="radarPosY">0.00</span></div>
+                            <div class="dropdown-stat-row"><span class="dropdown-stat-label">VELOCITY</span><span class="dropdown-stat-value" id="radarVelocity">0.00</span></div>
+                            <div class="dropdown-stat-row"><span class="dropdown-stat-label">MOTION</span><span class="dropdown-stat-value" id="radarMotion">NONE</span></div>
+                            <div class="dropdown-stat-row"><span class="dropdown-stat-label">CONFIDENCE</span><span class="dropdown-stat-value" id="radarConfidence">0%</span></div>
+                            <div class="dropdown-stat-row" style="margin-top: 10px;"><span class="dropdown-stat-label">STATUS</span><span class="dropdown-stat-value" id="radarConnectionStatus">DISCONNECTED</span></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="nav-item">
+                    <button class="nav-btn" onclick="toggleDropdown('vision')">Vision <div class="radar-status-indicator" id="visionStatusIndicator"></div></button>
+                    <div class="dropdown" id="visionDropdown">
+                        <div class="dropdown-header">
+                            <span>Miss Pi Vision Stream</span>
+                            <div class="dropdown-close" onclick="toggleDropdown('vision')">&times;</div>
+                        </div>
+                        <div class="dropdown-section">
+                            <div style="text-align: center; margin-bottom: 10px; padding: 15px; background: rgba(10, 14, 18, 0.5); border: 1px solid rgba(0, 229, 255, 0.3); border-radius: 8px;">
+                                <div id="visionStreamStatus" style="font-size: 11px; color: rgba(0, 229, 255, 0.7); margin-bottom: 8px;">WAITING FOR STREAM</div>
+                                <div id="visionNarration" style="font-size: 13px; color: #00e5ff; min-height: 40px; display: flex; align-items: center; justify-content: center; font-style: italic;">"Polaris is watching..."</div>
+                            </div>
+                            <div class="dropdown-stat-row"><span class="dropdown-stat-label">DETECTIONS</span><span class="dropdown-stat-value" id="visionDetections">0</span></div>
+                            <div class="dropdown-stat-row"><span class="dropdown-stat-label">PRIMARY OBJECT</span><span class="dropdown-stat-value" id="visionPrimaryObject">-</span></div>
+                            <div class="dropdown-stat-row"><span class="dropdown-stat-label">LAST UPDATE</span><span class="dropdown-stat-value" id="visionLastUpdate">--:--:--</span></div>
+                            <div class="dropdown-stat-row" style="margin-top: 10px;"><span class="dropdown-stat-label">STREAM</span><span class="dropdown-stat-value" id="visionConnectionStatus">DISCONNECTED</span></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="nav-item">
+                    <button class="nav-btn" id="uiScaleBtn" onclick="toggleDropdown('uiScale')" title="Display size — scales the entire page">⋯</button>
+                    <div class="dropdown ui-scale-dropdown" id="uiScaleDropdown">
+                        <div class="dropdown-header">
+                            <span>Display Size</span>
+                            <div class="dropdown-close" onclick="toggleDropdown('uiScale')">&times;</div>
+                        </div>
+                        <div class="ui-scale-row">
+                            <span class="ui-scale-cap">A−</span>
+                            <input type="range" id="uiScaleSlider" min="70" max="150" step="5" value="100" oninput="applyUiScale(this.value)" />
+                            <span class="ui-scale-cap">A+</span>
+                        </div>
+                        <div class="ui-scale-value">PAGE SCALE: <span id="uiScaleValue">100%</span></div>
+                        <div class="ui-scale-actions">
+                            <button class="nav-btn" onclick="resetUiScale()">RESET 100%</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="connection-status">
+            <div class="status-indicator" id="wsStatus"></div>
+            <span id="wsStatusText">CONNECTING</span>
+
+        </div>
+    </nav>
+    <!-- HOLODECK SPLIT-VIEW CONTAINER -->
+    <div class="holodeck-container">
+        <!-- TOP SECTION: CHAT INTERFACE -->
+        <div class="holodeck-top-section">
+            <div class="chat-container">
+                <div class="chat-section">
+                    <div class="chat-input-section">
+                        <div class="input-row">
+                            <input type="text" class="message-input" id="messageInput" placeholder="Type your message..." onkeypress="handleKeyPress(event)" />
+                            <button class="send-btn" onclick="sendMessage()">TRANSMIT</button>
+                        </div>
+                        <div class="audio-control">
+                            <label class="toggle-label">
+                                <input type="checkbox" id="audioToggle" onchange="toggleAudioPlayback()" />
+                                <span class="toggle-text">AUDIO RESPONSE</span>
+                            </label>
+                        </div>
+                        <audio id="ttsPlayer" style="display:none;" controls></audio>
+                    </div>
+                    <div class="chat-messages" id="chatMessages"></div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- RESIZE HANDLE -->
+        <div class="resize-handle" id="resizeHandle">
+            <div class="resize-grip"><span></span><span></span><span></span></div>
+            <div class="resize-grip"><span></span><span></span><span></span></div>
+        </div>
+        
+        <!-- BOTTOM SECTION: TASK FEED & MEMORY VAULT -->
+        <div class="holodeck-bottom-section" id="holodeckBottom">
+            <button class="collapse-toggle" id="collapseToggle" onclick="toggleBottomPanel()">
+                <span>▲</span> TACTICAL OPS
+            </button>
+            
+            <div class="holodeck-bottom-header">
+                <div class="holodeck-bottom-title">TACTICAL OPERATIONS</div>
+                <div class="holodeck-tabs">
+                    <button class="holodeck-tab-btn active" data-tab="taskfeed" onclick="switchHolodeckTab('taskfeed')">TASK FEED</button>
+                    <button class="holodeck-tab-btn" data-tab="vault" onclick="switchHolodeckTab('vault')">MEMORY VAULT</button>
+                    <button class="holodeck-tab-btn" data-tab="learning" onclick="switchHolodeckTab('learning')">LEARNING</button>
+                </div>
+            </div>
+            
+            <!-- TASK FEED CONTENT -->
+            <div class="holodeck-content-area active" id="taskfeedTab">
+                <div class="task-feed-container" id="taskFeedContainer">
+                    <div class="task-feed-item">
+                        <div class="task-feed-icon started">▶</div>
+                        <div class="task-feed-content">
+                            <div class="task-feed-title">HOLODECK SYSTEM INITIALIZED</div>
+                            <div class="task-feed-meta">Awaiting task events from Polaris Gateway...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- MEMORY VAULT CONTENT -->
+            <div class="holodeck-content-area" id="vaultTab">
+                <div class="vault-container">
+                    <div class="vault-status-bar">
+                        <div class="vault-status-indicator" id="vaultStatusIndicator"></div>
+                        <span id="vaultConnectionStatus">GATEWAY OFFLINE</span>
+                        <span id="vaultCounts">0 DOCS • 0 INDEXED</span>
+                        <span style="margin-left: auto; color: rgba(0, 229, 255, 0.5);">Memory Vault • /polaris_memory_vault</span>
+                    </div>
+                    
+                    <div class="vault-main-grid">
+                        <div class="vault-list-panel">
+                            <div class="vault-toolbar">
+                                <select class="vault-select" id="vaultCategorySelect" onchange="loadVaultList()">
+                                    <option value="">ALL</option>
+                                    <option value="core">CORE</option>
+                                    <option value="architecture">ARCHITECTURE</option>
+                                    <option value="user">USER</option>
+                                    <option value="lesson">LESSONS</option>
+                                    <option value="journal">JOURNAL</option>
+                                    <option value="attachment">ATTACHMENTS</option>
+                                </select>
+                                <input type="text" class="vault-search-input" id="vaultSearchInput" placeholder="Search the vault..." onkeypress="handleVaultSearchKeyPress(event)" />
+                                <button class="vault-btn" onclick="vaultSearch()">SEARCH</button>
+                            </div>
+                            <div class="vault-toolbar">
+                                <select class="vault-select" id="vaultSearchMode">
+                                    <option value="hybrid">HYBRID</option>
+                                    <option value="keyword">KEYWORD</option>
+                                    <option value="semantic">SEMANTIC</option>
+                                </select>
+                                <button class="vault-btn" onclick="loadVaultList()">BROWSE</button>
+                                <button class="vault-btn" onclick="newVaultDoc()">NEW</button>
+                                <button class="vault-btn" onclick="reindexVault(false)">REINDEX</button>
+                            </div>
+                            <div class="vault-doc-list" id="vaultDocList">
+                                <div class="vault-list-empty">Loading vault documents...</div>
+                            </div>
+                        </div>
+                        
+                        <div class="vault-editor-panel">
+                            <div class="vault-editor-header">
+                                <div>
+                                    <div class="vault-editor-title" id="vaultEditorTitle">NO DOCUMENT</div>
+                                    <div class="vault-editor-meta" id="vaultEditorMeta">Select a document from the browser</div>
+                                </div>
+                                <div class="vault-editor-actions">
+                                    <button class="vault-btn" onclick="saveVaultDoc()">SAVE</button>
+                                    <button class="vault-btn danger" onclick="deleteVaultDoc()">DELETE</button>
+                                </div>
+                            </div>
+                            <div class="vault-toolbar" id="vaultComposeBar" style="display: none;">
+                                <select class="vault-select" id="vaultNewCategory">
+                                    <option value="architecture">ARCHITECTURE</option>
+                                    <option value="user">USER</option>
+                                    <option value="lesson" selected>LESSONS</option>
+                                    <option value="journal">JOURNAL</option>
+                                    <option value="attachment">ATTACHMENTS</option>
+                                </select>
+                                <input type="text" class="vault-search-input" id="vaultNewTitle" placeholder="New document title..." />
+                            </div>
+                            <textarea class="vault-editor-textarea" id="vaultEditorTextarea" placeholder="Select a document to view and edit, or press NEW to compose..." spellcheck="false" disabled></textarea>
+                            <div class="vault-msg" id="vaultMsg"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- LEARNING & HEURISTICS CONTENT (ported from Polaris_page.html.old — LGI HUD theme) -->
+            <div class="holodeck-content-area" id="learningTab">
+                <div class="learning-toolbar">
+                    <div class="learning-subtabs">
+                        <button class="learning-subtab active" id="stagedRulesSubTab" onclick="switchLearningPane('staged')">STAGED RULES</button>
+                        <button class="learning-subtab" id="liveMemorySubTab" onclick="switchLearningPane('live')">LIVE MEMORY</button>
+                    </div>
+                    <div class="learning-toolbar-right">
+                        <span class="learning-counts" id="learningCounts">STAGED 0 &bull; LIVE 0</span>
+                        <button class="vault-btn" onclick="refreshLearningPanels()">REFRESH</button>
+                    </div>
+                </div>
+                <div id="stagedRulesContainer" class="staged-rules-container">
+                    <div class="learning-empty"><div>Loading staged rules...</div></div>
+                </div>
+                <div id="liveMemoryContainer" class="live-memory-container" style="display: none;">
+                    <div class="learning-empty"><div>Loading active heuristics...</div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- EDIT STAGED RULE MODAL (ported from Polaris_page.html.old — LGI HUD theme) -->
+    <div id="editModalOverlay" class="edit-modal-overlay" style="display: none;">
+        <div class="edit-modal">
+            <div class="edit-modal-header">EDIT STAGED RULE</div>
+            <div class="edit-modal-field">
+                <label class="edit-modal-label">Rule Text</label>
+                <textarea id="editRuleText" class="edit-modal-textarea"></textarea>
+            </div>
+            <div class="edit-modal-field">
+                <label class="edit-modal-label">Category</label>
+                <select id="editRuleCategory" class="edit-modal-select">
+                    <option value="user_preference">User Preference</option>
+                    <option value="communication_style">Communication Style</option>
+                    <option value="system_interaction">System Interaction</option>
+                    <option value="task_execution">Task Execution</option>
+                </select>
+            </div>
+            <div class="edit-modal-field">
+                <label class="edit-modal-label">Confidence Score</label>
+                <input type="number" id="editRuleConfidence" class="edit-modal-input" min="0" max="1" step="0.1" />
+            </div>
+            <div class="edit-modal-actions">
+                <button class="edit-modal-btn edit-modal-btn-save" id="saveEditBtn">Save Changes</button>
+                <button class="edit-modal-btn edit-modal-btn-cancel" id="cancelEditBtn">Cancel</button>
+            </div>
+        </div>
+    </div>
+    <script>
+        const GATEWAY_URL = window.location.protocol + '//' + window.location.hostname + ':8082';
+        const WS_URL = 'ws://' + window.location.hostname + ':8082';
+        let socket = null;
+        // Global shared chat - all devices use the same user ID to see the same conversation
+        let currentUserId = 'rich';
+        let messageHistory = [];
+        let socketEverConnected = false; // distinguishes first connect from re-connects
+        let historyFetchSeq = 0;         // stale-response guard for racing history fetches
+        let sessionStartTime = Date.now();
+        let prevSqliteOps = null;
+        let prevChromaOps = null;
+        let prevSqliteTimestamp = null;
+        let prevChromaTimestamp = null;
+        
+        // Initialize user selector on page load
+        function initUserSelector() {
+            const select = document.getElementById('navUserSelect');
+            if (select) {
+                select.value = currentUserId;
+            }
+            // Chat history will be fetched in init() after WebSocket connects
+        }
+        
+        function changeUser() {
+            const select = document.getElementById('navUserSelect');
+            currentUserId = select.value;
+            // Note: User switching is disabled for global shared chat
+            // All devices now use the same 'rich' user ID for shared conversation
+            
+            // Clear chat display and reload history for new user
+            const messagesDiv = document.getElementById('chatMessages');
+            messagesDiv.innerHTML = '';
+            messageHistory = [];
+            
+            fetchChatHistory();
+            updateSessionDiagnostics();
+        }
+        
+        function toggleDropdown(name) {
+            const allDropdowns = document.querySelectorAll('.dropdown');
+            const targetDropdown = document.getElementById(name + 'Dropdown');
+            allDropdowns.forEach(dropdown => {
+                if (dropdown.id !== name + 'Dropdown') {
+                    dropdown.classList.remove('active');
+                }
+            });
+            targetDropdown.classList.toggle('active');
+        }
+        
+        function switchMemoryTab(tabId) {
+            document.querySelectorAll('.memory-tab-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.tab === tabId);
+            });
+            document.querySelectorAll('.memory-tab-content').forEach(content => {
+                content.classList.toggle('active', content.id === tabId + 'Tab');
+            });
+        }
+        
+        function closeAllDropdowns() {
+            document.querySelectorAll('.dropdown').forEach(dropdown => {
+                dropdown.classList.remove('active');
+            });
+        }
+        
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.nav-item')) {
+                closeAllDropdowns();
+            }
+        });
+        
+        // ── Display size control (HDI-style whole-page scale via the nav ⋯ menu, 70%–150%) ──
+        const UI_SCALE_KEY = 'polaris_ui_scale';
+        function applyUiScale(pct) {
+            let v = parseFloat(pct);
+            if (!isFinite(v)) v = 100;
+            v = Math.max(70, Math.min(150, v));
+            document.documentElement.style.setProperty('--ui-scale', (v / 100).toFixed(2));
+            try { localStorage.setItem(UI_SCALE_KEY, String(v)); } catch (e) { /* storage may be blocked — scale still applies for this page load */ }
+            const label = document.getElementById('uiScaleValue');
+            if (label) label.textContent = Math.round(v) + '%';
+            const slider = document.getElementById('uiScaleSlider');
+            if (slider) slider.value = v;
+        }
+        function resetUiScale() { applyUiScale(100); }
+        // Boot: the inline pre-paint script already applied the persisted scale before first render;
+        // this pass syncs the label + slider thumb and re-clamps defensively.
+        (function initUiScale() {
+            let saved = NaN;
+            try { saved = parseFloat(localStorage.getItem(UI_SCALE_KEY)); } catch (e) { saved = NaN; }
+            applyUiScale(isFinite(saved) ? saved : 100);
+        })();
+        
+        // CSI Radar System
+        let radarSocket = null;
+        let radarConnected = false;
+        let radarTrail = [];
+        const MAX_TRAIL_LENGTH = 20;
+        
+        function initRadar() {
+            console.log('[Radar] Initializing radar system...');
+            connectRadarSocket();
+            initRadarCanvas();
+        }
+        
+        function connectRadarSocket() {
+            // Connect to SocketIO on polaris-gateway (port 5001 inside container, mapped to 8083 on host)
+            const radarIoUrl = window.location.protocol + '//' + window.location.hostname + ':8083';
+            console.log('[Radar] Connecting to:', radarIoUrl);
+            radarSocket = io(radarIoUrl, {
+                transports: ['websocket', 'polling'],
+                reconnection: true,
+                // (v1.0.5) Was reconnectionAttempts: 10 — same trap the chat socket hit
+                // (v1.0.4): ~10 reconnect ticks of outage, then silence FOREVER.
+                reconnectionAttempts: Infinity,
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 10000
+            });
+            
+            radarSocket.on('connect', () => {
+                console.log('[Radar] Connected to Gateway');
+                console.log('[Radar] Socket ID:', radarSocket.id);
+                radarConnected = true;
+                document.getElementById('radarStatusIndicator').classList.add('active');
+                document.getElementById('radarConnectionStatus').textContent = 'CONNECTED';
+                radarSocket.emit('join_radar', { room: 'radar_dashboard' });
+            });
+            
+            radarSocket.on('disconnect', () => {
+                console.log('[Radar] Disconnected from Gateway');
+                console.log('[Radar] Reason:', radarSocket.disconnected);
+                radarConnected = false;
+                document.getElementById('radarStatusIndicator').classList.remove('active');
+                document.getElementById('radarConnectionStatus').textContent = 'DISCONNECTED';
+            });
+            
+            radarSocket.on('radar_update', (data) => {
+                console.log('[Radar] Update:', data);
+                updateRadarDisplay(data);
+            });
+            
+            radarSocket.on('radar_status', (data) => {
+                updateRadarStatus(data);
+            });
+            
+            radarSocket.on('radar_snapshot', (data) => {
+                if (data.current_position) {
+                    updateRadarDisplay({
+                        x: data.current_position[0],
+                        y: data.current_position[1],
+                        velocity: data.velocity,
+                        motion_detected: data.motion_detected,
+                        motion_confidence: data.motion_confidence
+                    });
+                }
+            });
+            
+            radarSocket.on('connect_error', (error) => {
+                console.error('[Radar] Connection error:', error);
+                console.error('[Radar] Make sure polaris-gateway container is running and port 8083 is accessible');
+                radarConnected = false;
+                document.getElementById('radarStatusIndicator').classList.remove('active');
+                document.getElementById('radarConnectionStatus').textContent = 'ERROR: ' + error.message;
+            });
+        }
+        
+        function initRadarCanvas() {
+            const canvas = document.getElementById('radarCanvas');
+            const ctx = canvas.getContext('2d');
+            drawRadarGrid(ctx, canvas.width, canvas.height);
+        }
+        
+        function drawRadarGrid(ctx, width, height) {
+            const centerX = width / 2;
+            const centerY = height / 2;
+            const maxRadius = Math.min(width, height) / 2 - 10;
+            ctx.clearRect(0, 0, width, height);
+            ctx.strokeStyle = 'rgba(0, 229, 255, 0.2)';
+            ctx.lineWidth = 1;
+            for (let i = 1; i <= 4; i++) {
+                const radius = (maxRadius / 4) * i;
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            ctx.beginPath();
+            ctx.moveTo(centerX, 10);
+            ctx.lineTo(centerX, height - 10);
+            ctx.moveTo(10, centerY);
+            ctx.lineTo(width - 10, centerY);
+            ctx.stroke();
+            ctx.fillStyle = 'rgba(0, 229, 255, 0.6)';
+            ctx.font = '10px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('N', centerX, 20);
+            ctx.fillText('S', centerX, height - 10);
+            ctx.fillText('W', 15, centerY + 4);
+            ctx.fillText('E', width - 15, centerY + 4);
+        }
+        
+        function drawRadarPosition(ctx, width, height, x, y) {
+            const centerX = width / 2;
+            const centerY = height / 2;
+            const maxRadius = Math.min(width, height) / 2 - 10;
+            const canvasX = centerX + (x * maxRadius);
+            const canvasY = centerY + (y * maxRadius);
+            radarTrail.push({ x: canvasX, y: canvasY, alpha: 1.0 });
+            if (radarTrail.length > MAX_TRAIL_LENGTH) radarTrail.shift();
+            for (let i = 0; i < radarTrail.length; i++) {
+                const point = radarTrail[i];
+                const alpha = (i / radarTrail.length) * 0.8;
+                ctx.fillStyle = `rgba(0, 229, 255, ${alpha})`;
+                ctx.beginPath();
+                ctx.arc(point.x, point.y, 3 * (i / radarTrail.length), 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.fillStyle = 'rgba(0, 229, 255, 0.9)';
+            ctx.shadowColor = 'rgba(0, 229, 255, 0.8)';
+            ctx.shadowBlur = 15;
+            ctx.beginPath();
+            ctx.arc(canvasX, canvasY, 6, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = 'rgba(0, 229, 255, 0.8)';
+            ctx.font = '9px monospace';
+            ctx.textAlign = 'left';
+            ctx.fillText(`(${x.toFixed(2)}, ${y.toFixed(2)})`, canvasX + 10, canvasY - 10);
+        }
+        
+        function updateRadarDisplay(data) {
+            const canvas = document.getElementById('radarCanvas');
+            const ctx = canvas.getContext('2d');
+            drawRadarGrid(ctx, canvas.width, canvas.height);
+            if (data.x !== undefined && data.y !== undefined) {
+                drawRadarPosition(ctx, canvas.width, canvas.height, data.x, data.y);
+                document.getElementById('radarPosX').textContent = data.x.toFixed(2);
+                document.getElementById('radarPosY').textContent = data.y.toFixed(2);
+                if (data.velocity !== undefined) {
+                    // Backend sends velocity as scalar magnitude (already computed via np.linalg.norm)
+                    document.getElementById('radarVelocity').textContent = data.velocity.toFixed(3);
+                }
+                document.getElementById('radarMotion').textContent = data.motion_detected ? 'DETECTED' : 'NONE';
+                document.getElementById('radarMotion').style.color = data.motion_detected ? '#00ff00' : 'rgba(0, 229, 255, 0.7)';
+                if (data.confidence !== undefined) {
+                    document.getElementById('radarConfidence').textContent = (data.confidence * 100).toFixed(0) + '%';
+                }
+            }
+        }
+        
+        function updateRadarStatus(data) {
+            console.log('[Radar] Engine Status:', data);
+        }
+        
+        // ============== VISION STREAM SYSTEM ==============
+        let visionSocket = null;
+        let visionConnected = false;
+        let visionLastUpdate = null;
+        
+        function initVision() {
+            console.log('[Vision] Initializing vision stream...');
+            connectVisionSocket();
+        }
+        
+        function connectVisionSocket() {
+            // Connect to SocketIO on polaris-gateway (port 5001 inside container, mapped to 8083 on host)
+            const visionIoUrl = window.location.protocol + '//' + window.location.hostname + ':8083';
+            console.log('[Vision] Connecting to:', visionIoUrl);
+            visionSocket = io(visionIoUrl, {
+                transports: ['websocket', 'polling'],
+                reconnection: true,
+                // (v1.0.5) Was reconnectionAttempts: 10 — same trap the chat socket hit
+                // (v1.0.4): ~10 reconnect ticks of outage, then silence FOREVER.
+                reconnectionAttempts: Infinity,
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 10000
+            });
+            
+            visionSocket.on('connect', () => {
+                console.log('[Vision] Connected to Gateway');
+                console.log('[Vision] Socket ID:', visionSocket.id);
+                visionConnected = true;
+                document.getElementById('visionStatusIndicator').classList.add('active');
+                document.getElementById('visionConnectionStatus').textContent = 'CONNECTED';
+                // (v1.0.7) Gateway connect ≠ camera streaming — a viewer joining
+                // the room is not a camera. Real stream state arrives below via
+                // vision_history.stream_active, vision_update, and the
+                // jarvis_announcement connection/disconnection events.
+                document.getElementById('visionStreamStatus').textContent = 'WAITING FOR STREAM';
+                document.getElementById('visionStreamStatus').style.color = 'rgba(0, 229, 255, 0.7)';
+                
+                // Join vision room (viewer membership — receives vision_update narration
+                // and detection history for the dashboard display)
+                visionSocket.emit('join_vision', { room: 'vision_dashboard' });
+                // (v1.0.6) Phantom camera handshake deleted. This socket used to emit
+                // vision_connect claiming to be camera 'miss-pi-front' @ 640x480 — a
+                // MissPi-era artifact. A dashboard VIEWER is not a camera: the fake
+                // announce overwrote vision_device_name in burst_receiver.py, fired a
+                // bogus JARVIS "Vision stream online" announcement on every page load,
+                // and left vision_stream_active=true after tab close (no
+                // vision_disconnect was ever emitted). Narration/detections still flow
+                // via join_vision → vision_update, so nothing else changes.
+            });
+            
+            visionSocket.on('disconnect', () => {
+                console.log('[Vision] Disconnected from Gateway');
+                visionConnected = false;
+                document.getElementById('visionStatusIndicator').classList.remove('active');
+                document.getElementById('visionConnectionStatus').textContent = 'DISCONNECTED';
+                document.getElementById('visionStreamStatus').textContent = 'STREAM INACTIVE';
+                document.getElementById('visionStreamStatus').style.color = 'rgba(255, 100, 100, 0.7)';
+            });
+            
+            visionSocket.on('vision_update', (data) => {
+                console.log('[Vision] Detection update:', data);
+                updateVisionDisplay(data);
+            });
+            
+            visionSocket.on('vision_history', (data) => {
+                console.log('[Vision] Received history:', data.detections?.length || 0, 'detections');
+                // (v1.0.7) join_vision ack carries the camera's REAL stream state —
+                // drive the status pill from it instead of our own socket status.
+                if (typeof data.stream_active === 'boolean') {
+                    document.getElementById('visionStreamStatus').textContent = data.stream_active ? 'STREAM ACTIVE' : 'STREAM INACTIVE';
+                    document.getElementById('visionStreamStatus').style.color = data.stream_active ? '#00ff00' : 'rgba(255, 100, 100, 0.7)';
+                }
+                if (data.detections && data.detections.length > 0) {
+                    // Show most recent detection from history
+                    updateVisionDisplay(data.detections[data.detections.length - 1]);
+                }
+            });
+            
+            // (v1.0.7) Finding B: dead-listener removal. The gateway's
+            // 'polaris_vision' fan-out emitted into room 'radar_dashboard' (never
+            // joined by this vision socket), so this handler had NEVER fired —
+            // orphaned on both ends. Narration already flows via vision_update →
+            // updateVisionDisplay(). Replaced by the same room's REAL camera
+            // on/off announcements so the status pill tracks the camera, not us.
+            visionSocket.on('jarvis_announcement', (data) => {
+                console.log('[Vision] JARVIS:', data.type, '-', data.message);
+                if (data.type === 'connection') {
+                    document.getElementById('visionStreamStatus').textContent = 'STREAM ACTIVE';
+                    document.getElementById('visionStreamStatus').style.color = '#00ff00';
+                } else if (data.type === 'disconnection') {
+                    document.getElementById('visionStreamStatus').textContent = 'STREAM INACTIVE';
+                    document.getElementById('visionStreamStatus').style.color = 'rgba(255, 100, 100, 0.7)';
+                }
+            });
+            
+            visionSocket.on('connect_error', (error) => {
+                console.error('[Vision] Connection error:', error);
+                console.error('[Vision] Make sure polaris-gateway container is running and port 8083 is accessible');
+                visionConnected = false;
+                document.getElementById('visionStatusIndicator').classList.remove('active');
+                document.getElementById('visionConnectionStatus').textContent = 'ERROR: ' + error.message;
+            });
+        }
+        
+        function updateVisionDisplay(data) {
+            // Update detections count
+            const detectionsCount = data.detections?.length || 0;
+            document.getElementById('visionDetections').textContent = detectionsCount;
+            
+            // Update primary object
+            if (data.detections && data.detections.length > 0) {
+                const primaryClass = data.detections[0].class || 'unknown';
+                const confidence = Math.round((data.detections[0].confidence || 0) * 100);
+                document.getElementById('visionPrimaryObject').textContent = `${primaryClass.toUpperCase()} (${confidence}%)`;
+            } else {
+                document.getElementById('visionPrimaryObject').textContent = '-';
+            }
+            
+            // Update narration
+            if (data.narration) {
+                document.getElementById('visionNarration').textContent = `"${data.narration}"`;
+            }
+            
+            // Update timestamp
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('en-US', { hour12: false });
+            document.getElementById('visionLastUpdate').textContent = timeStr;
+            visionLastUpdate = now;
+            
+            // Update stream status
+            document.getElementById('visionStreamStatus').textContent = 'DETECTIONS ACTIVE';
+            document.getElementById('visionStreamStatus').style.color = '#00ff00';
+        }
+        
+        function init() {
+            initUserSelector();
+            connectWebSocket();
+            fetchMemoryStats();
+            fetchChatHistory();
+            initRadar();
+            initVision();
+            initLearningHeuristics();
+            setInterval(fetchMemoryStats, 5000);
+            setInterval(updateSessionDiagnostics, 1000);
+            setInterval(syncChatHistory, 10000); // Fallback sync every 10 seconds (WebSocket is primary)
+            // (v1.0.4 chat repair) Belt-and-braces heartbeat: prods a disconnected
+            // socket every 15 s so a stalled reconnection never leaves the feed dead.
+            setInterval(() => {
+                if (socket && !socket.connected) {
+                    try { socket.connect(); } catch (e) { /* manager handles it */ }
+                }
+            }, 15000);
+        }
+        
+        async function syncChatHistory() {
+            // Fallback check every 10 seconds - only used if WebSocket misses a message
+            // This does NOT refresh the chat, just verifies we have all messages
+            try {
+                const response = await fetch(GATEWAY_URL + '/api/history/' + currentUserId);
+                const data = await response.json();
+
+                // (v1.0.4 chat repair) The gateway serves the PAIRED unification format
+                // ({history: [{user_message, ai_response, timestamp, sender}]} — see
+                // fetchChatHistory) while this loader used to check a flat
+                // `data.messages` field that no longer exists: the 10-second safety
+                // net silently did nothing its whole life. Expand pairs the same way.
+                const rawEntries = Array.isArray(data.history) ? data.history : (Array.isArray(data.messages) ? data.messages : []);
+                const flatMessages = [];
+                for (const pair of rawEntries) {
+                    if (!pair || typeof pair !== 'object') continue;
+                    if (typeof pair.user_message === 'string' || typeof pair.ai_response === 'string') {
+                        if (pair.user_message) {
+                            flatMessages.push({
+                                sender: pair.sender || currentUserId,
+                                content: pair.user_message,
+                                timestamp: pair.timestamp || ''
+                            });
+                        }
+                        if (pair.ai_response) {
+                            flatMessages.push({
+                                sender: 'polaris',
+                                content: pair.ai_response,
+                                timestamp: pair.timestamp || ''
+                            });
+                        }
+                    } else {
+                        flatMessages.push(pair);
+                    }
+                }
+
+                if (flatMessages.length > 0) {
+                    // Check if we're missing any messages (WebSocket should have caught these)
+                    const missingMessages = flatMessages.filter(m => {
+                        const content = m.content || m.message || '';
+                        return content && !messageHistory.some(existing => (existing.content || existing.message || '') === content);
+                    });
+
+                    if (missingMessages.length > 0) {
+                        console.log('[Sync] Found', missingMessages.length, 'missing messages, adding them...');
+                        // Add missing messages in reverse order (oldest first for proper prepend)
+                        missingMessages.reverse();
+                        for (const msg of missingMessages) {
+                            addMessageToChat(msg);
+                            messageHistory.push(msg);
+                        }
+                    }
+                }
+            } catch (e) {
+                // Silently fail - WebSocket is primary, this is just a safety net
+            }
+        }
+        
+        function connectWebSocket() {
+            socket = io(WS_URL, {
+                transports: ['websocket', 'polling'],
+                reconnection: true,
+                // (v1.0.4 chat repair) Was reconnectionAttempts: 10 — ~10 s of outage
+                // (worker recycle, gateway boot, LLM hang) then silence FOREVER with
+                // a dead feed and no visible retry.
+                reconnectionAttempts: Infinity,
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 10000
+            });
+            socket.on('connect', () => {
+                document.getElementById('wsStatus').classList.add('online');
+                document.getElementById('wsStatusText').textContent = 'ONLINE';
+                // (v1.0.4 chat repair) Every RE-connect (init() already fetched for the
+                // first one) re-pulls history so messages missed while the socket was
+                // dead render on return instead of vanishing.
+                if (socketEverConnected) {
+                    fetchChatHistory();
+                }
+                socketEverConnected = true;
+            });
+            socket.on('disconnect', () => {
+                document.getElementById('wsStatus').classList.remove('online');
+                document.getElementById('wsStatusText').textContent = 'DISCONNECTED';
+            });
+            socket.on('connect_error', (error) => {
+                console.error('Connection error:', error);
+                document.getElementById('wsStatus').classList.remove('online');
+                document.getElementById('wsStatusText').textContent = 'ERROR';
+            });
+            socket.io.on('reconnect_attempt', () => {
+                document.getElementById('wsStatusText').textContent = 'RECONNECTING...';
+            });
+            // Real-time chat message streaming from server
+            socket.on('chat_message', (data) => {
+                console.log('[WebSocket] Received chat_message:', data);
+                // Only process messages for current user
+                if (data.user_id === currentUserId || data.sender === 'polaris') {
+                    const content = data.content || data.message || '';
+                    const sender = data.sender || data.user || 'unknown';
+                    const timestamp = data.timestamp || '';
+                    // Duplicate guard. (v1.0.4 chat repair) sendMessage() now renders
+                    // the user's own bubble locally, and the gateway broadcasts its
+                    // echo with a FRESH broadcast-time timestamp (the local one is the
+                    // client clock) — the old sender+content+timestamp triple never
+                    // matched that echo and would double-render user messages now that
+                    // the fallback sync works too. User-sender duplicates collapse
+                    // within a 150 s window; Polaris keeps the strict triple so
+                    // genuinely repeated short replies still render.
+                    const parseTs = (ts) => { const t = Date.parse(ts); return isNaN(t) ? null : t; };
+                    const incomingTs = parseTs(timestamp);
+                    const isUserSender = sender === currentUserId;
+                    const isDuplicate = messageHistory.some(m => {
+                        const mSender = m.sender || m.user || 'unknown';
+                        const mContent = m.content || m.message || '';
+                        if (mSender !== sender || mContent !== content) return false;
+                        if (!isUserSender) return (m.timestamp || '') === timestamp;
+                        const mTs = parseTs(m.timestamp || '');
+                        if (incomingTs === null || mTs === null) return true;
+                        return Math.abs(incomingTs - mTs) < 150000; // 150 s echo window
+                    });
+                    if (!isDuplicate) {
+                        addMessageToChat(data);
+                        messageHistory.push(data);
+                    }
+                }
+            });
+            // Handle tool execution events (background task results)
+            socket.on('tool_execution', (data) => {
+                console.log('[WebSocket] Received tool_execution:', data);
+                // Tool results are logged internally, no UI update needed
+                // The follow-up chat message will notify the user of completion
+            });
+        }
+        
+        let isAudioPlaying = false;
+        let currentAudio = null;
+        let audioEnabled = false;
+        let currentAudioSessionId = null;
+        let currentMediaSource = null;
+        let currentAudioController = null;
+        
+        function toggleAudioPlayback() {
+            const checkbox = document.getElementById('audioToggle');
+            audioEnabled = checkbox.checked;
+            console.log('[TTS] Audio playback', audioEnabled ? 'enabled' : 'disabled');
+        }
+        
+        function generateSessionId() {
+            return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        }
+        
+        async function cancelCurrentStream() {
+            if (currentAudioSessionId) {
+                try {
+                    await fetch(GATEWAY_URL + '/api/tts/cancel', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ session_id: currentAudioSessionId })
+                    });
+                } catch (e) {
+                    console.warn('[TTS] Failed to cancel server stream:', e);
+                }
+            }
+            if (currentAudioController) {
+                currentAudioController.abort();
+                currentAudioController = null;
+            }
+            if (currentMediaSource) {
+                try { 
+                    if (currentMediaSource.readyState === 'open') {
+                        currentMediaSource.endOfStream(); 
+                    }
+                } catch (e) {}
+                currentMediaSource = null;
+            }
+            const ttsPlayer = document.getElementById('ttsPlayer');
+            if (ttsPlayer) {
+                resetAudioElement(ttsPlayer);
+            }
+            currentAudioSessionId = null;
+        }
+        
+        // Global tracking for per-message audio players
+        const messageAudioPlayers = new Map(); // messageId -> { sessionId, isPlaying, audioController, text }
+        let activeMessageId = null; // Currently playing message
+        let ttsQueue = []; // Sequential TTS playback queue: [{ messageId, text }]
+        let ttsPumpRunning = false; // True while the queue pump is actively playing through messages
+        
+        function stopAllAudioPlayers() {
+            messageAudioPlayers.forEach((player, msgId) => {
+                if (player.isPlaying) {
+                    player.isPlaying = false;
+                    if (player.audioController) {
+                        player.audioController.abort();
+                    }
+                    updateMessagePlayerUI(msgId);
+                }
+            });
+            activeMessageId = null;
+            
+            const ttsPlayer = document.getElementById('ttsPlayer');
+            resetAudioElement(ttsPlayer);
+        }
+        
+        // Enqueue a message for sequential TTS playback. atFront=true jumps it ahead of the queue.
+        function enqueueTTS(messageId, text, atFront = false) {
+            if (!messageId || !text) return;
+            const playerState = messageAudioPlayers.get(messageId);
+            if (!playerState) return;
+            if (playerState.isPlaying) return; // Already active
+            if (ttsQueue.some(item => item.messageId === messageId)) return; // Already queued
+            
+            if (atFront) {
+                ttsQueue.unshift({ messageId, text });
+            } else {
+                ttsQueue.push({ messageId, text });
+            }
+            pumpTTSQueue();
+        }
+        
+        // Automatic playback entry point (respects the audio toggle)
+        function playTTSResponse(text, messageId) {
+            if (!text || !messageId || !audioEnabled) return;
+            enqueueTTS(messageId, text);
+        }
+        
+        // Sequential queue pump: synthesizes and plays ONE message at a time, in arrival order.
+        async function pumpTTSQueue() {
+            if (ttsPumpRunning) return;
+            ttsPumpRunning = true;
+            
+            try {
+                while (ttsQueue.length > 0) {
+                    const { messageId, text } = ttsQueue.shift();
+                    const playerState = messageAudioPlayers.get(messageId);
+                    
+                    // Message was closed/removed while queued - skip it
+                    if (!playerState) continue;
+                    
+                    const sessionId = generateSessionId();
+                    const audioController = new AbortController();
+                    
+                    playerState.sessionId = sessionId;
+                    playerState.isPlaying = true;
+                    playerState.audioController = audioController;
+                    activeMessageId = messageId;
+                    updateMessagePlayerUI(messageId);
+                    
+                    try {
+                        const ttsPlayer = document.getElementById('ttsPlayer');
+                        
+                        // Clean up any previous playback. resetAudioElement also clears
+                        // stale onended/onerror handlers so queued synthetic error events
+                        // from the previous message cannot sabotage this new playback.
+                        resetAudioElement(ttsPlayer);
+                        
+                        console.log(`[TTS] Synthesizing message ${messageId} (${text.length} chars)`);
+                        const response = await fetch(GATEWAY_URL + '/api/tts', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ text: text }),
+                            signal: audioController.signal
+                        });
+                        
+                        if (!response.ok) {
+                            throw new Error(`Gateway error: ${response.status}`);
+                        }
+                        
+                        const audioBlob = await response.blob();
+                        
+                        // Stop was requested while synthesizing - skip playback
+                        if (audioController.signal.aborted) {
+                            playerState.isPlaying = false;
+                            updateMessagePlayerUI(messageId);
+                            if (activeMessageId === messageId) activeMessageId = null;
+                            continue;
+                        }
+                        
+                        const audioUrl = URL.createObjectURL(audioBlob);
+                        ttsPlayer.src = audioUrl;
+                        ttsPlayer.style.display = 'block';
+                        setupPlayerHandlers(ttsPlayer, messageId);
+                        await ttsPlayer.play();
+                        
+                        // Wait until this message finishes (or is stopped) before starting the next
+                        await new Promise((resolve) => {
+                            const poll = setInterval(() => {
+                                const current = messageAudioPlayers.get(messageId);
+                                if (!current || !current.isPlaying || audioController.signal.aborted) {
+                                    clearInterval(poll);
+                                    resolve();
+                                }
+                            }, 200);
+                        });
+                        
+                        if (activeMessageId === messageId) activeMessageId = null;
+                        console.log(`[TTS] Finished message ${messageId}`);
+                    } catch (error) {
+                        if (error.name === 'AbortError') {
+                            console.log(`[TTS] Playback aborted for ${messageId}`);
+                        } else {
+                            console.error('[TTS] Error playing message:', error);
+                        }
+                        playerState.isPlaying = false;
+                        updateMessagePlayerUI(messageId);
+                        if (activeMessageId === messageId) activeMessageId = null;
+                        // Continue to the next queued message
+                    }
+                }
+            } finally {
+                ttsPumpRunning = false;
+            }
+        }
+        
+        async function streamTTSAudio(mediaSource, ttsPlayer, text, sessionId, audioController, messageId) {
+            let sourceBuffer = null;
+            
+            try {
+                sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
+                sourceBuffer.mode = 'sequence';
+                
+                const response = await fetch(GATEWAY_URL + '/api/tts-stream', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text }),
+                    signal: audioController.signal
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Stream error: ${response.status}`);
+                }
+                
+                const reader = response.body.getReader();
+                
+                while (true) {
+                    if (audioController.signal.aborted || sessionId !== messageAudioPlayers.get(messageId)?.sessionId) {
+                        break;
+                    }
+                    
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    if (sourceBuffer.updating || mediaSource.readyState !== 'open') {
+                        if (mediaSource.readyState !== 'open') {
+                            console.log('[TTS-Stream] MediaSource closed, stopping append');
+                            break;
+                        }
+                        await new Promise((resolve, reject) => {
+                            const onUpdate = () => {
+                                sourceBuffer.removeEventListener('updateend', onUpdate);
+                                sourceBuffer.removeEventListener('error', onError);
+                                resolve();
+                            };
+                            const onError = (e) => {
+                                sourceBuffer.removeEventListener('updateend', onUpdate);
+                                sourceBuffer.removeEventListener('error', onError);
+                                reject(e);
+                            };
+                            sourceBuffer.addEventListener('updateend', onUpdate, { once: true });
+                            sourceBuffer.addEventListener('error', onError, { once: true });
+                        });
+                    }
+                    
+                    if (mediaSource.readyState === 'open') {
+                        sourceBuffer.appendBuffer(value);
+                    }
+                }
+                
+                if (mediaSource.readyState === 'open') {
+                    mediaSource.endOfStream();
+                }
+                
+                console.log('[TTS-Stream] Stream completed for session', sessionId);
+                
+                // Mark as completed
+                const playerState = messageAudioPlayers.get(messageId);
+                if (playerState && playerState.isPlaying) {
+                    playerState.isPlaying = false;
+                    updateMessagePlayerUI(messageId);
+                }
+                
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    console.log('[TTS-Stream] Stream cancelled');
+                } else {
+                    console.error('[TTS-Stream] Error:', error);
+                    if (mediaSource.readyState === 'open') {
+                        try { mediaSource.endOfStream(); } catch (e) {}
+                    }
+                    await playTTSFallback(text, ttsPlayer, sessionId, audioController, messageId);
+                }
+            } finally {
+                // Don't clear global state here - let the message player track it
+            }
+        }
+        
+        async function playTTSFallback(text, ttsPlayer, sessionId, audioController, messageId) {
+            console.log('[TTS] Using fallback non-streaming endpoint');
+            try {
+                const response = await fetch(GATEWAY_URL + '/api/tts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text }),
+                    signal: audioController.signal
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Gateway error: ${response.status}`);
+                }
+                
+                const audioBlob = await response.blob();
+                const audioUrl = URL.createObjectURL(audioBlob);
+                
+                ttsPlayer.src = audioUrl;
+                ttsPlayer.style.display = 'block';
+                await ttsPlayer.play();
+                
+                setupPlayerHandlers(ttsPlayer, messageId);
+                
+            } catch (error) {
+                console.error('[TTS-Fallback] Error:', error);
+                const playerState = messageAudioPlayers.get(messageId);
+                if (playerState) {
+                    playerState.isPlaying = false;
+                    updateMessagePlayerUI(messageId);
+                }
+                throw error;
+            }
+        }
+        
+        function setupPlayerHandlers(ttsPlayer, messageId) {
+            ttsPlayer.onended = () => {
+                console.log('[TTS] Playback ended');
+                const playerState = messageAudioPlayers.get(messageId);
+                if (playerState) {
+                    playerState.isPlaying = false;
+                    updateMessagePlayerUI(messageId);
+                }
+                resetAudioElement(ttsPlayer);
+            };
+            
+            ttsPlayer.onerror = (e) => {
+                // Guard: ignore synthetic error events fired by our own cleanup
+                // (empty/removed src) - only handle errors from real playback.
+                if (!ttsPlayer.getAttribute('src')) return;
+                console.error('[TTS] Audio playback error:', e);
+                const playerState = messageAudioPlayers.get(messageId);
+                if (playerState) {
+                    playerState.isPlaying = false;
+                    updateMessagePlayerUI(messageId);
+                }
+                resetAudioElement(ttsPlayer);
+            };
+        }
+        
+        // Safely reset the shared audio element WITHOUT firing synthetic error events.
+        // NOTE: assigning src = '' re-invokes the media load algorithm, which fails
+        // on an empty src and fires ANOTHER 'error' event -> infinite onerror loop
+        // (console error storm + continuous media-load churn). Clearing handlers
+        // first, then removeAttribute('src') + load(), resets the element cleanly:
+        // a src-less element waits quietly and fires no error event.
+        function resetAudioElement(ttsPlayer) {
+            ttsPlayer.onended = null;
+            ttsPlayer.onerror = null;
+            try { ttsPlayer.pause(); } catch (e) {}
+            if (ttsPlayer.src && ttsPlayer.src.startsWith('blob:')) {
+                try { URL.revokeObjectURL(ttsPlayer.src); } catch (e) {}
+            }
+            ttsPlayer.removeAttribute('src');
+            try { ttsPlayer.load(); } catch (e) {}
+            ttsPlayer.style.display = 'none';
+        }
+        
+        // Toggle play/stop for a specific message. Manual clicks always work,
+        // regardless of the audio toggle - only automatic playback respects it.
+        function toggleMessageAudio(messageId) {
+            const player = messageAudioPlayers.get(messageId);
+            if (!player || !player.text) return;
+            
+            if (player.isPlaying) {
+                // Stop this message; any queued messages stay queued
+                player.isPlaying = false;
+                if (player.audioController) {
+                    player.audioController.abort();
+                }
+                updateMessagePlayerUI(messageId);
+                if (activeMessageId === messageId) {
+                    activeMessageId = null;
+                }
+                const ttsPlayer = document.getElementById('ttsPlayer');
+                resetAudioElement(ttsPlayer);
+            } else {
+                // Stop whatever is currently playing, then jump this message to the front of the queue
+                messageAudioPlayers.forEach((other, otherId) => {
+                    if (other.isPlaying) {
+                        other.isPlaying = false;
+                        if (other.audioController) {
+                            other.audioController.abort();
+                        }
+                        updateMessagePlayerUI(otherId);
+                    }
+                });
+                const ttsPlayer = document.getElementById('ttsPlayer');
+                ttsPlayer.pause();
+                activeMessageId = null;
+                // Remove any existing queue entry so it jumps to the front
+                ttsQueue = ttsQueue.filter(item => item.messageId !== messageId);
+                enqueueTTS(messageId, player.text, true);
+            }
+        }
+        
+        // Update the play/pause icon for a message
+        function updateMessagePlayerUI(messageId) {
+            const player = messageAudioPlayers.get(messageId);
+            if (!player) return;
+            
+            const playBtn = document.getElementById(`play-btn-${messageId}`);
+            if (playBtn) {
+                playBtn.textContent = player.isPlaying ? '❚❚' : '▶';
+            }
+        }
+        
+        
+        function addMessageToChat(data, autoPlay = true) {
+            const messagesDiv = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            
+            const sender = data.sender || data.user || 'unknown';
+            let content = data.content || data.message || data.text || '';
+            const isPolaris = sender === 'polaris' || sender === 'ai' || sender === 'assistant';
+            
+            // Generate a unique ID for this message
+            const messageId = 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            
+            // Extract clean text from tool responses
+            if (typeof content === 'string' && content.includes('{"tool":')) {
+                try {
+                    const toolMatch = content.match(/\{"tool":\s*"([^"]+)"[^}]*\}/);
+                    if (toolMatch) {
+                        // Extract the human-readable part before the tool call
+                        const textBeforeTool = content.split('{"tool":')[0].trim();
+                        content = textBeforeTool || 'Executing ' + toolMatch[1] + '...';
+                    }
+                } catch (e) {
+                    console.error('[Chat] Error parsing tool response:', e);
+                }
+            }
+            
+            // Create audio player controls for Polaris messages
+            let audioControls = '';
+            if (isPolaris && content) {
+                // Initialize player state for this message
+                messageAudioPlayers.set(messageId, {
+                    sessionId: null,
+                    isPlaying: false,
+                    audioController: null,
+                    text: content
+                });
+                
+                audioControls = `
+                    <div class="message-audio-controls">
+                        <button class="audio-play-btn" id="play-btn-${messageId}" onclick="toggleMessageAudio('${messageId}')">▶</button>
+                        <button class="audio-close-btn" onclick="closeMessage('${messageId}')">×</button>
+                    </div>
+                `;
+            }
+            
+            messageDiv.className = 'message-bubble ' + (isPolaris ? 'ai' : 'user');
+            messageDiv.id = messageId;
+            messageDiv.innerHTML = `
+                <div class="message-sender">${sender.toUpperCase()}</div>
+                <div class="message-content">${content}</div>
+                ${audioControls}
+            `;
+            
+            // Prepend message (newest at top)
+            messagesDiv.insertBefore(messageDiv, messagesDiv.firstChild);
+            
+            // Keep only last 10 messages total (simple sliding window)
+            const allMessages = Array.from(messagesDiv.querySelectorAll('.message-bubble'));
+            if (allMessages.length > 10) {
+                allMessages.slice(10).forEach(msg => msg.remove());
+            }
+            
+            // Auto-play TTS for Polaris responses (newest message auto-plays)
+            if (isPolaris && content && autoPlay) {
+                playTTSResponse(content, messageId);
+            }
+        }
+        
+        // Close/remove a specific message
+        function closeMessage(messageId) {
+            const messageEl = document.getElementById(messageId);
+            if (messageEl) {
+                messageEl.remove();
+            }
+            // Remove from the TTS queue if still pending
+            ttsQueue = ttsQueue.filter(item => item.messageId !== messageId);
+            // Stop audio if this message is playing
+            const player = messageAudioPlayers.get(messageId);
+            if (player) {
+                if (player.isPlaying && player.audioController) {
+                    player.audioController.abort();
+                }
+                player.isPlaying = false;
+                messageAudioPlayers.delete(messageId);
+            }
+            if (activeMessageId === messageId) {
+                stopAllAudioPlayers();
+            }
+        }
+        
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            if (!message || !socket) return;
+            
+            input.value = '';
+            const wsWasUp = socket && socket.connected;
+            
+            // (v1.0.4 chat repair) Render our own message immediately. The gateway
+            // only broadcasts the user-message echo AFTER its LLM turns complete
+            // (2-60 s), and a dead socket never echoes at all — waiting on the echo
+            // alone made the page look dead ("goes silent"). The chat_message
+            // handler collapses the late echo against this local bubble.
+            const localUserMsg = { sender: currentUserId, content: message, timestamp: new Date().toISOString(), _local: true };
+            addMessageToChat(localUserMsg);
+            messageHistory.push(localUserMsg);
+            
+            // Send to gateway via REST API
+            try {
+                const response = await fetch(GATEWAY_URL + '/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prompt: message,
+                        user_id: currentUserId,
+                        client_source: 'dashboard_browser',
+                        session_id: currentUserId + '_default'
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Gateway responded with error: ' + response.status);
+                }
+                
+                const data = await response.json();
+                // With a healthy socket the room echo (room=rich) renders Polaris's
+                // reply. While the socket stays down, paint the reply locally from
+                // the POST body — the gateway returns the tool-call-scrubbed
+                // response field the LGI consumes.
+                if (data && data.response && (!wsWasUp || !socket.connected)) {
+                    const aiMsg = { sender: 'polaris', content: data.response, timestamp: new Date().toISOString() };
+                    addMessageToChat(aiMsg);
+                    messageHistory.push(aiMsg);
+                }
+            } catch (error) {
+                console.error('Chat error:', error);
+                const timestamp = new Date().toISOString();
+                addMessageToChat({ sender: 'polaris', content: 'Error: ' + error.message, timestamp: timestamp });
+            }
+        }
+        
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') sendMessage();
+        }
+        
+        async function fetchChatHistory() {
+            // (v1.0.4 chat repair) The gateway's /api/history returns the PAIRED
+            // unification format — {history: [{user_message, ai_response, timestamp,
+            // sender}, ...], count} — after the shared-window pairing change. This
+            // loader still checked the legacy flat {messages: [{content, sender}]}
+            // shape, so nothing ever rendered: the chat bubble area was silently
+            // empty on every page load ("no texts when I load the page"). Expand
+            // each paired entry into its user + Polaris bubbles; keep the legacy
+            // flat shape as a fallback for old gateway builds.
+            const fetchSeq = ++historyFetchSeq;
+            try {
+                const response = await fetch(GATEWAY_URL + '/api/history/' + currentUserId);
+                const data = await response.json();
+
+                const rawEntries = Array.isArray(data.history) ? data.history : (Array.isArray(data.messages) ? data.messages : []);
+                const flatMessages = [];
+                for (const pair of rawEntries) {
+                    if (!pair || typeof pair !== 'object') continue;
+                    if (typeof pair.user_message === 'string' || typeof pair.ai_response === 'string') {
+                        if (pair.user_message) {
+                            flatMessages.push({
+                                sender: pair.sender || currentUserId,
+                                content: pair.user_message,
+                                timestamp: pair.timestamp || ''
+                            });
+                        }
+                        if (pair.ai_response) {
+                            flatMessages.push({
+                                sender: 'polaris',
+                                content: pair.ai_response,
+                                timestamp: pair.timestamp || ''
+                            });
+                        }
+                    } else {
+                        flatMessages.push(pair);
+                    }
+                }
+
+                // Drop in-flight work if a newer fetch (reconnect catch-up or
+                // user switch) superseded this one. MUST bail BEFORE touching
+                // the DOM: wiping then bailing left the chat empty (the
+                // "history reverts seconds after load" bug — a slow stale
+                // fetch nuked the freshly rendered DOM and never repainted).
+                if (fetchSeq !== historyFetchSeq) return;
+                const messagesDiv = document.getElementById('chatMessages');
+                messagesDiv.innerHTML = '';
+                messageHistory = [];
+
+                if (flatMessages.length > 0) {
+                    // API returns oldest-first, so grab the last 10 (newest) and reverse to display newest-first
+                    const latestMessages = flatMessages.slice(-10).reverse(); // Get last 10, reverse to newest-first
+
+                    // Render messages chronologically (oldest to newest)
+                    for (const msg of latestMessages) {
+                        addMessageToChat(msg, false); // History load - no auto-play
+                        messageHistory.push(msg);
+                    }
+
+                    console.log('[Chat] Loaded', latestMessages.length, 'messages for user', currentUserId);
+                } else {
+                    console.log('[Chat] No history returned for user', currentUserId);
+                }
+            } catch (e) {
+                console.error('History fetch error:', e);
+                if (fetchSeq !== historyFetchSeq) return; // A newer fetch owns the DOM
+                const messagesDiv = document.getElementById('chatMessages');
+                // Never replace an already-rendered chat with an error banner
+                if (messagesDiv.children.length === 0) {
+                    messagesDiv.innerHTML = '<div style="text-align: center; color: #5a6e78; padding: 20px;">Failed to load chat history.</div>';
+                }
+            }
+        }
+        
+        async function fetchMemoryStats() {
+            try {
+                const response = await fetch(GATEWAY_URL + '/api/memory/stats');
+                const data = await response.json();
+                if (data.sqlite) {
+                    document.getElementById('sqliteUsers').textContent = data.sqlite.users || 0;
+                    document.getElementById('sqliteMessages').textContent = data.sqlite.messages || 0;
+                    document.getElementById('sqliteHeuristics').textContent = (data.sqlite.heuristics ? (data.sqlite.heuristics.staged || 0) + (data.sqlite.heuristics.approved || 0) + (data.sqlite.heuristics.total || 0) : 0);
+                }
+                if (data.chromadb) {
+                    document.getElementById('chromaGlobal').textContent = data.chromadb.global_knowledge || 0;
+                    document.getElementById('chromaUser').textContent = data.chromadb.user_memories || 0;
+                    document.getElementById('chromaContext').textContent = data.chromadb.conversation_context || 0;
+                }
+                const currentTimestamp = Date.now();
+                const totalSqliteOps = (data.sqlite ? (data.sqlite.users || 0) + (data.sqlite.messages || 0) : 0);
+                const totalChromaOps = (data.chromadb ? (data.chromadb.global_knowledge || 0) + (data.chromadb.user_memories || 0) + (data.chromadb.conversation_context || 0) : 0);
+                const sqliteOpsSec = calculateOpsPerSecond(totalSqliteOps, prevSqliteOps, currentTimestamp, prevSqliteTimestamp);
+                const chromaOpsSec = calculateOpsPerSecond(totalChromaOps, prevChromaOps, currentTimestamp, prevChromaTimestamp);
+                document.getElementById('sqliteOpsSec').textContent = sqliteOpsSec;
+                document.getElementById('chromaOpsSec').textContent = chromaOpsSec;
+                prevSqliteOps = totalSqliteOps;
+                prevChromaOps = totalChromaOps;
+                prevSqliteTimestamp = currentTimestamp;
+                prevChromaTimestamp = currentTimestamp;
+            } catch (e) { console.error('Stats fetch error:', e); }
+        }
+        
+        function calculateOpsPerSecond(current, previous, currentTs, previousTs) {
+            if (!previous || !previousTs) return 0;
+            const delta = current - previous;
+            const timeDelta = (currentTs - previousTs) / 1000;
+            return timeDelta > 0 ? Math.round(delta / timeDelta) : 0;
+        }
+        
+        function updateSessionDiagnostics() {
+            const duration = Math.floor((Date.now() - sessionStartTime) / 1000);
+            const minutes = Math.floor(duration / 60);
+            const seconds = duration % 60;
+            document.getElementById('sessionId').textContent = 'SESSION_' + currentUserId.toUpperCase() + '_' + Math.floor(sessionStartTime / 1000);
+            document.getElementById('activeUser').textContent = currentUserId.toUpperCase();
+            document.getElementById('messageCount').textContent = messageHistory.length;
+            document.getElementById('sessionDuration').textContent = (minutes < 10 ? '0' : '') + minutes + ':' + (seconds < 10 ? '0' : '') + seconds;
+            // Simple sliding window: show last 10 messages
+            const slidingWindowEl = document.getElementById('slidingWindowDisplay');
+            if (messageHistory.length > 0) {
+                const recentMessages = messageHistory.slice(0, 10);
+                slidingWindowEl.innerHTML = recentMessages.map((msg, i) => {
+                    const sender = (msg.sender || msg.user || 'unknown').toUpperCase();
+                    const content = (msg.content || msg.message || '').toString();
+                    const displayContent = content.length > 40 ? content.substring(0, 40) + '...' : content;
+                    return '<div>[' + (i + 1) + '] ' + sender + ': ' + displayContent + '</div>';
+                }).join('');
+            }
+        }
+        
+        /* ============== HOLODECK SPLIT-VIEW FUNCTIONS ============== */
+        
+        // Resize handle logic
+        let isResizing = false;
+        let holodeckBottom = document.getElementById('holodeckBottom');
+        let resizeHandle = document.getElementById('resizeHandle');
+        let holodeckTop = document.querySelector('.holodeck-top-section');
+        let lastSplitPct = null; // (v4.6.1) most recent operator drag value; persisted on release
+        
+        // (v4.6.1) Restore the persisted split (localStorage['polaris_split'], same convention as
+        // the ⋯ display dial). Default is the CSS flex: 0 0 70% whenever nothing valid is stored.
+        try {
+            const savedSplit = parseFloat(localStorage.getItem('polaris_split'));
+            if (holodeckBottom && savedSplit >= 30 && savedSplit <= 70) {
+                holodeckBottom.style.flexBasis = savedSplit.toFixed(2) + '%';
+            }
+        } catch (err) { /* storage unavailable — CSS default applies */ }
+        
+        if (resizeHandle) {
+            resizeHandle.addEventListener('mousedown', (e) => {
+                isResizing = true;
+                document.body.style.cursor = 'ns-resize';
+                // Freeze the 0.3s layout transitions — they rubber-band against the cursor mid-drag
+                if (holodeckBottom) holodeckBottom.style.transition = 'none';
+                if (holodeckTop) holodeckTop.style.transition = 'none';
+                e.preventDefault();
+            });
+        }
+        
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+            
+            const container = document.querySelector('.holodeck-container');
+            const containerRect = container.getBoundingClientRect();
+            const newHeight = containerRect.bottom - e.clientY;
+            
+            // Calculate percentage
+            const percentage = (newHeight / containerRect.height) * 100;
+            
+            // (v4.6.1) Operator dial 30%–70% of the deck: 70 = tactical-dominant default
+            // (chat 30%), dragging down to 30 flips emphasis (chat 70 / tactical 30).
+            if (percentage >= 30 && percentage <= 70) {
+                // flex-basis is the live control — a definite flex-basis shadows inline height.
+                lastSplitPct = percentage.toFixed(2);
+                holodeckBottom.style.flexBasis = lastSplitPct + '%';
+                holodeckBottom.classList.remove('collapsed', 'expanded');
+            }
+        });
+        
+        document.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false;
+                document.body.style.cursor = '';
+                if (holodeckBottom) holodeckBottom.style.transition = '';
+                if (holodeckTop) holodeckTop.style.transition = '';
+                try {
+                    if (lastSplitPct !== null) localStorage.setItem('polaris_split', lastSplitPct);
+                } catch (err) { /* storage unavailable — split stays session-only */ }
+            }
+        });
+        
+        // Collapse/expand toggle
+        function toggleBottomPanel() {
+            const bottom = document.getElementById('holodeckBottom');
+            const toggle = document.getElementById('collapseToggle');
+            
+            if (bottom.classList.contains('collapsed')) {
+                bottom.classList.remove('collapsed');
+                bottom.classList.add('expanded');
+                toggle.innerHTML = '<span>▲</span> TACTICAL OPS';
+            } else {
+                bottom.classList.add('collapsed');
+                bottom.classList.remove('expanded');
+                toggle.innerHTML = '<span>▼</span> TACTICAL OPS';
+            }
+        }
+        
+        // Tab switching
+        function switchHolodeckTab(tabName) {
+            // Update tab buttons
+            document.querySelectorAll('.holodeck-tab-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.tab === tabName);
+            });
+            
+            // Update content areas
+            document.querySelectorAll('.holodeck-content-area').forEach(area => {
+                area.classList.toggle('active', area.id === tabName + 'Tab');
+            });
+            
+            // (LGI HUD port) Pull fresh learning data whenever its tab is opened
+            if (tabName === 'learning') { refreshLearningPanels(); }
+        }
+        
+        /* ============== LEARNING & HEURISTICS SYSTEM (LGI HUD port, restored from Polaris_page.html.old — part 1/3) ============== */
+        // Gateway surface (verified alive): GET /api/heuristics/staged,
+        // GET /api/heuristics (active heuristics store), POST /api/heuristics/approve/<id>,
+        // DELETE /api/heuristics/reject/<id>, PUT /api/heuristics/edit/<id>.
+        // The old /api/heuristics/live endpoint no longer exists; Live Memory now
+        // reads the heuristics store directly.
+        
+        let stagedRulesCache = {};        // rule_id -> rule object (edit modal source of truth)
+        let lastStagedPayload = [];       // raw staged list
+        let lastLivePayload = [];         // active heuristics list (newest first)
+        
+        if (typeof escapeHtml !== 'function') {
+            window.escapeHtml = function escapeHtml(str) {
+                return String(str)
+                    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+            };
+        }
+        
+        function extractRuleArray(data) {
+            // Defensive shape handling: bare arrays (old gateway), {staged_rules: [...]}
+            // (/staged, current) and {heuristics: [...]} (/api/heuristics, current).
+            if (Array.isArray(data)) return data;
+            if (!data || typeof data !== 'object') return [];
+            if (Array.isArray(data.staged_rules)) return data.staged_rules;
+            if (Array.isArray(data.heuristics)) return data.heuristics;
+            return [];
+        }
+        
+        function formatCategory(category) {
+            return String(category || 'General').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        }
+        
+        function showRuleToast(message, type) {
+            try {
+                const toast = document.createElement('div');
+                toast.className = 'rule-toast ' + (type || 'info');
+                toast.textContent = message;
+                document.body.appendChild(toast);
+                setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 250); }, 2600);
+            } catch (e) { /* toast is cosmetic only */ }
+        }
+        
+        function updateLearningCounts() {
+            const el = document.getElementById('learningCounts');
+            if (el) el.textContent = 'STAGED ' + lastStagedPayload.length + ' \u2022 LIVE ' + lastLivePayload.length;
+        }
+        // (part 2/3 follows: fetchers, renderers, init)
+        
+        async function fetchStagedRules() {
+            try {
+                const response = await fetch(`${GATEWAY_URL}/api/heuristics/staged`);
+                if (response.ok) {
+                    lastStagedPayload = extractRuleArray(await response.json());
+                    renderStagedRules();
+                }
+            } catch (error) {
+                console.error('[Heuristics] Failed to fetch staged rules:', error);
+            }
+        }
+        
+        async function fetchLiveMemory() {
+            try {
+                const response = await fetch(`${GATEWAY_URL}/api/heuristics`);
+                if (response.ok) {
+                    // Newest first for operator review; cap DOM size at 50 cards.
+                    lastLivePayload = extractRuleArray(await response.json()).slice(-50).reverse();
+                    renderLiveMemory();
+                }
+            } catch (error) {
+                console.error('[Heuristics] Failed to fetch live memory:', error);
+            }
+        }
+        
+        function refreshLearningPanels() {
+            fetchStagedRules();
+            fetchLiveMemory();
+        }
+        
+        function initLearningHeuristics() {
+            refreshLearningPanels();
+            // Light periodic refresh so staged proposals surface without a manual look
+            setInterval(refreshLearningPanels, 20000);
+        }
+        
+        function renderStagedRules() {
+            const container = document.getElementById('stagedRulesContainer');
+            if (!container) return;
+            stagedRulesCache = {};
+            
+            if (!lastStagedPayload.length) {
+                container.innerHTML = `
+                    <div class="learning-empty">
+                        <div class="learning-empty-icon">&#10003;</div>
+                        <div>No pending rules staged &mdash; Polaris is proposing nothing right now</div>
+                    </div>`;
+                updateLearningCounts();
+                return;
+            }
+            
+            container.innerHTML = lastStagedPayload.map(rule => {
+                if (!rule || !rule.id) return '';
+                stagedRulesCache[rule.id] = rule;
+                const text = rule.rule || rule.text || '';
+                const conf = (typeof rule.confidence === 'number' && isFinite(rule.confidence)) ? rule.confidence.toFixed(2) : escapeHtml(rule.confidence || '--');
+                return `
+                    <div class="rule-card" data-rule-id="${escapeHtml(rule.id)}">
+                        <div class="rule-header">
+                            <span class="rule-category ${escapeHtml(rule.category || 'general')}">${escapeHtml(formatCategory(rule.category))}</span>
+                            <span class="rule-confidence">Confidence: <span>${conf}</span></span>
+                        </div>
+                        <div class="rule-text">${escapeHtml(text)}</div>
+                        <div class="rule-actions">
+                            <button class="rule-btn rule-btn-approve" onclick="approveRule('${escapeHtml(rule.id)}')">Approve</button>
+                            <button class="rule-btn rule-btn-reject" onclick="rejectRule('${escapeHtml(rule.id)}')">Reject</button>
+                            <button class="rule-btn rule-btn-edit" onclick="editRule('${escapeHtml(rule.id)}')">Edit</button>
+                        </div>
+                    </div>`;
+            }).join('');
+            updateLearningCounts();
+        }
+        // (renderLiveMemory + part 3/3 follow: pane switching, edit-modal wiring)
+        
+        function renderLiveMemory() {
+            const container = document.getElementById('liveMemoryContainer');
+            if (!container) return;
+            
+            if (!lastLivePayload.length) {
+                container.innerHTML = `
+                    <div class="learning-empty">
+                        <div class="learning-empty-icon">&#129504;</div>
+                        <div>No active heuristics &mdash; approve staged rules to build Polaris' live memory</div>
+                    </div>`;
+                updateLearningCounts();
+                return;
+            }
+            
+            container.innerHTML = lastLivePayload.map(rule => {
+                if (!rule) return '';
+                const text = rule.rule || rule.text || '';
+                const conf = (typeof rule.confidence === 'number' && isFinite(rule.confidence)) ? rule.confidence.toFixed(2) : escapeHtml(rule.confidence || '--');
+                return `
+                    <div class="rule-card live">
+                        <div class="rule-header">
+                            <span class="rule-category ${escapeHtml(rule.category || 'general')}">${escapeHtml(formatCategory(rule.category))}</span>
+                            <span class="rule-confidence">Confidence: <span>${conf}</span></span>
+                        </div>
+                        <div class="rule-text">${escapeHtml(text)}</div>
+                    </div>`;
+            }).join('');
+            updateLearningCounts();
+        }
+        
+        // Global rule controls (cables for the card buttons)
+        window.approveRule = async (ruleId) => {
+            try {
+                const response = await fetch(`${GATEWAY_URL}/api/heuristics/approve/${encodeURIComponent(ruleId)}`, { method: 'POST' });
+                if (response.ok) {
+                    showRuleToast('Rule approved and activated in live memory', 'success');
+                    // Approval moves a rule staged -> live, so refresh BOTH panes.
+                    refreshLearningPanels();
+                } else {
+                    showRuleToast('Approve failed (gateway ' + response.status + ')', 'error');
+                }
+            } catch (error) {
+                console.error('[Heuristics] Failed to approve rule:', error);
+                showRuleToast('Approve failed \u2014 gateway unreachable', 'error');
+            }
+        };
+        
+        window.rejectRule = async (ruleId) => {
+            try {
+                const response = await fetch(`${GATEWAY_URL}/api/heuristics/reject/${encodeURIComponent(ruleId)}`, { method: 'DELETE' });
+                if (response.ok) {
+                    showRuleToast('Rule rejected and discarded', 'success');
+                    fetchStagedRules();
+                } else {
+                    showRuleToast('Reject failed (gateway ' + response.status + ')', 'error');
+                }
+            } catch (error) {
+                console.error('[Heuristics] Failed to reject rule:', error);
+                showRuleToast('Reject failed \u2014 gateway unreachable', 'error');
+            }
+        };
+        // (editRule, pane switching and modal wiring follow)
+        
+        window.editRule = (ruleId) => {
+            const rule = stagedRulesCache[ruleId];
+            if (!rule) return;
+            editModeRuleId = ruleId;
+            document.getElementById('editRuleText').value = rule.rule || rule.text || '';
+            document.getElementById('editRuleCategory').value = rule.category || 'system_interaction';
+            document.getElementById('editRuleConfidence').value = (typeof rule.confidence === 'number') ? rule.confidence : 0.5;
+            document.getElementById('editModalOverlay').style.display = 'flex';
+        };
+        
+        function switchLearningPane(paneName) {
+            // Update sub-tab buttons
+            document.querySelectorAll('.learning-subtab').forEach(btn => {
+                btn.classList.toggle('active', btn.id === (paneName === 'staged' ? 'stagedRulesSubTab' : 'liveMemorySubTab'));
+            });
+            // Toggle panes
+            const stagedPane = document.getElementById('stagedRulesContainer');
+            const livePane = document.getElementById('liveMemoryContainer');
+            if (paneName === 'staged') {
+                stagedPane.style.display = 'block';
+                livePane.style.display = 'none';
+            } else {
+                stagedPane.style.display = 'none';
+                livePane.style.display = 'block';
+                fetchLiveMemory(); // (old behaviour) refresh live data each open
+            }
+        }
+        
+        // Edit modal wiring
+        const editModalOverlay = document.getElementById('editModalOverlay');
+        let editModeRuleId = null;
+        
+        document.getElementById('cancelEditBtn').addEventListener('click', () => {
+            editModalOverlay.style.display = 'none';
+            editModeRuleId = null;
+        });
+        
+        document.getElementById('saveEditBtn').addEventListener('click', async () => {
+            if (!editModeRuleId) return;
+            const updatedRule = {
+                // (Gateway contract) PUT /edit expects keys: rule / category / confidence.
+                // The old dashboard sent {text: ...} which the current gateway ignores.
+                rule: document.getElementById('editRuleText').value,
+                category: document.getElementById('editRuleCategory').value,
+                confidence: parseFloat(document.getElementById('editRuleConfidence').value)
+            };
+            try {
+                const response = await fetch(`${GATEWAY_URL}/api/heuristics/edit/${encodeURIComponent(editModeRuleId)}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(updatedRule)
+                });
+                if (response.ok) {
+                    showRuleToast('Staged rule updated', 'success');
+                    editModalOverlay.style.display = 'none';
+                    editModeRuleId = null;
+                    fetchStagedRules();
+                } else {
+                    showRuleToast('Save failed (gateway ' + response.status + ')', 'error');
+                }
+            } catch (error) {
+                console.error('[Heuristics] Failed to save rule edit:', error);
+                showRuleToast('Save failed \u2014 gateway unreachable', 'error');
+            }
+        });
+        
+        editModalOverlay.addEventListener('click', (e) => {
+            if (e.target === editModalOverlay) {
+                editModalOverlay.style.display = 'none';
+                editModeRuleId = null;
+            }
+        });
+        
+        /* ============== TASK FEED SYSTEM ============== */
+        
+        let taskFeedSocket = null;
+        
+        function initTaskFeed() {
+            console.log('[TaskFeed] Initializing task feed...');
+            connectTaskFeedSocket();
+        }
+        
+        function connectTaskFeedSocket() {
+            const taskFeedUrl = window.location.protocol + '//' + window.location.hostname + ':8082';
+            console.log('[TaskFeed] Connecting to:', taskFeedUrl);
+            
+            taskFeedSocket = io(taskFeedUrl, {
+                transports: ['websocket', 'polling'],
+                reconnection: true,
+                // (v1.0.5) Was reconnectionAttempts: 10 — same trap the chat socket hit
+                // (v1.0.4): ~10 reconnect ticks of outage, then silence FOREVER.
+                reconnectionAttempts: Infinity,
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 10000
+            });
+            
+            taskFeedSocket.on('connect', () => {
+                console.log('[TaskFeed] Connected to Gateway');
+                taskFeedSocket.emit('join_tasks', { room: 'tasks_dashboard' });
+            });
+            
+            taskFeedSocket.on('disconnect', () => {
+                console.log('[TaskFeed] Disconnected from Gateway');
+            });
+            
+            taskFeedSocket.on('task_started', (data) => {
+                console.log('[TaskFeed] Task started:', data);
+                addTaskFeedItem('started', 'TASK STARTED', data.task_id || 'Unknown Task', new Date());
+            });
+            
+            taskFeedSocket.on('task_completed', (data) => {
+                console.log('[TaskFeed] Task completed:', data);
+                addTaskFeedItem('completed', 'TASK COMPLETED', data.task_id || 'Unknown Task', new Date());
+            });
+            
+            taskFeedSocket.on('task_failed', (data) => {
+                console.log('[TaskFeed] Task failed:', data);
+                addTaskFeedItem('failed', 'TASK FAILED', data.task_id || 'Unknown Task', new Date());
+            });
+        }
+        
+        function addTaskFeedItem(status, title, taskId, timestamp) {
+            const container = document.getElementById('taskFeedContainer');
+            const timeStr = timestamp.toLocaleTimeString('en-US', { hour12: false });
+            
+            const item = document.createElement('div');
+            item.className = 'task-feed-item';
+            item.innerHTML = `
+                <div class="task-feed-icon ${status}">${status === 'started' ? '▶' : status === 'completed' ? '✓' : '✗'}</div>
+                <div class="task-feed-content">
+                    <div class="task-feed-title">${title}</div>
+                    <div class="task-feed-meta">${taskId} • ${timeStr}</div>
+                </div>
+            `;
+            
+            // Insert at top
+            container.insertBefore(item, container.firstChild);
+            
+            // Keep only last 50 items
+            const items = container.querySelectorAll('.task-feed-item');
+            if (items.length > 50) {
+                items[items.length - 1].remove();
+            }
+        }
+        
+        /* ============== MEMORY VAULT SYSTEM ============== */
+        
+        let vaultOnline = false;
+        let vaultCurrentPath = null;
+        let vaultComposing = false;
+        
+        function initVault() {
+            console.log('[Vault] Initializing Memory Vault...');
+            loadVaultStats();
+            loadVaultList();
+            setInterval(loadVaultStats, 30000);
+        }
+        
+        function setVaultMsg(text, isError) {
+            const el = document.getElementById('vaultMsg');
+            el.textContent = text;
+            el.classList.toggle('error', !!isError);
+        }
+        
+        function vaultListError(message) {
+            const listEl = document.getElementById('vaultDocList');
+            listEl.innerHTML = '';
+            const el = document.createElement('div');
+            el.className = 'vault-list-empty';
+            el.textContent = '✗ ' + message;
+            listEl.appendChild(el);
+        }
+        
+        async function loadVaultStats() {
+            try {
+                const response = await fetch(GATEWAY_URL + '/api/memory/vault/stats');
+                const data = await response.json();
+                if (!response.ok || data.status !== 'success') throw new Error('bad response');
+                vaultOnline = true;
+                const s = data.stats || {};
+                document.getElementById('vaultCounts').textContent =
+                    (s.documents != null ? s.documents : 0) + ' DOCS • ' +
+                    (s.indexed_entries != null ? s.indexed_entries : 0) + ' INDEXED';
+                document.getElementById('vaultStatusIndicator').classList.add('connected');
+                const statusText = document.getElementById('vaultConnectionStatus');
+                statusText.textContent = 'VAULT ONLINE';
+                statusText.style.color = '#00ff88';
+            } catch (error) {
+                vaultOnline = false;
+                document.getElementById('vaultStatusIndicator').classList.remove('connected');
+                const statusText = document.getElementById('vaultConnectionStatus');
+                statusText.textContent = 'GATEWAY OFFLINE';
+                statusText.style.color = '#ff4444';
+                setVaultMsg('Vault API unreachable: ' + error.message, true);
+            }
+        }
+        
+        async function loadVaultList() {
+            const category = document.getElementById('vaultCategorySelect').value;
+            try {
+                const url = GATEWAY_URL + '/api/memory/vault/list?limit=200' +
+                    (category ? '&category=' + encodeURIComponent(category) : '');
+                const response = await fetch(url);
+                const data = await response.json();
+                if (!response.ok || data.status !== 'success') throw new Error(data.error || 'status ' + response.status);
+                renderVaultDocs(data.documents || [], false);
+            } catch (error) {
+                vaultListError('Vault list failed: ' + error.message);
+            }
+        }
+        
+        async function vaultSearch() {
+            const query = document.getElementById('vaultSearchInput').value.trim();
+            if (!query) { loadVaultList(); return; }
+            const mode = document.getElementById('vaultSearchMode').value;
+            try {
+                const response = await fetch(GATEWAY_URL + '/api/memory/vault/query', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: query, mode: mode, limit: 25 })
+                });
+                const data = await response.json();
+                if (!response.ok || data.status !== 'success') throw new Error(data.error || 'status ' + response.status);
+                renderVaultDocs(data.results || [], true);
+                setVaultMsg((data.count || 0) + ' result(s) • ' + mode);
+            } catch (error) {
+                vaultListError('Search failed: ' + error.message);
+            }
+        }
+        
+        function handleVaultSearchKeyPress(event) {
+            if (event.key === 'Enter') {
+                vaultSearch();
+            }
+        }
+        
+        function renderVaultDocs(docs, isSearch) {
+            const listEl = document.getElementById('vaultDocList');
+            listEl.innerHTML = '';
+            if (!docs.length) {
+                const empty = document.createElement('div');
+                empty.className = 'vault-list-empty';
+                empty.textContent = isSearch ? 'No results.' : 'Vault is empty for this category.';
+                listEl.appendChild(empty);
+                return;
+            }
+            docs.forEach(d => {
+                const item = document.createElement('div');
+                item.className = 'vault-doc-item' + (d.path === vaultCurrentPath ? ' active' : '');
+                item.dataset.path = d.path;
+                item.onclick = () => openVaultDoc(d.path);
+                const title = document.createElement('div');
+                title.className = 'vault-doc-title';
+                title.textContent = d.title || d.path;
+                const meta = document.createElement('div');
+                meta.className = 'vault-doc-meta';
+                let metaText = (d.category || '') +
+                    (d.updated ? ' • ' + String(d.updated).replace('T', ' ').slice(0, 16) : '');
+                if (isSearch && d.score != null) {
+                    metaText += ' • score ' + d.score + ' (' + (d.match_type || '') + ')';
+                }
+                meta.textContent = metaText;
+                const snippet = document.createElement('div');
+                snippet.className = 'vault-doc-snippet';
+                snippet.textContent = (d.snippet || '').slice(0, 160);
+                item.appendChild(title);
+                item.appendChild(meta);
+                item.appendChild(snippet);
+                listEl.appendChild(item);
+            });
+        }
+        
+        async function openVaultDoc(path) {
+            if (!path) return;
+            try {
+                const response = await fetch(GATEWAY_URL + '/api/memory/vault/doc?path=' + encodeURIComponent(path));
+                const data = await response.json();
+                if (!response.ok || data.status !== 'success') throw new Error(data.error || 'status ' + response.status);
+                const doc = data.document;
+                vaultCurrentPath = doc.path;
+                vaultComposing = false;
+                document.getElementById('vaultComposeBar').style.display = 'none';
+                document.getElementById('vaultEditorTitle').textContent = (doc.meta && doc.meta.title) || doc.path;
+                const metaBits = [];
+                if (doc.meta) {
+                    if (doc.meta.category) metaBits.push(doc.meta.category);
+                    if (doc.meta.tags) metaBits.push('tags: ' + doc.meta.tags);
+                    if (doc.meta.user) metaBits.push('user: ' + doc.meta.user);
+                }
+                metaBits.push(doc.path);
+                if (doc.modified) metaBits.push('mod: ' + String(doc.modified).replace('T', ' ').slice(0, 16));
+                document.getElementById('vaultEditorMeta').textContent = metaBits.join(' • ');
+                const textarea = document.getElementById('vaultEditorTextarea');
+                textarea.value = doc.content || '';
+                textarea.disabled = false;
+                document.querySelectorAll('.vault-doc-item').forEach(el => {
+                    el.classList.toggle('active', el.dataset.path === doc.path);
+                });
+                setVaultMsg('Opened ' + doc.path);
+            } catch (error) {
+                setVaultMsg('✗ Open failed: ' + error.message, true);
+            }
+        }
+        
+        async function saveVaultDoc() {
+            const textarea = document.getElementById('vaultEditorTextarea');
+            const content = textarea.value;
+            if (vaultComposing) {
+                const title = document.getElementById('vaultNewTitle').value.trim();
+                const category = document.getElementById('vaultNewCategory').value;
+                if (!title) { setVaultMsg('✗ Title is required for a new document', true); return; }
+                if (!content.trim()) { setVaultMsg('✗ Content is required', true); return; }
+                try {
+                    const response = await fetch(GATEWAY_URL + '/api/memory/vault/write', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            category: category, title: title, content: content,
+                            user: currentUserId, source: 'dashboard'
+                        })
+                    });
+                    const data = await response.json();
+                    if (!response.ok || data.status !== 'success') throw new Error(data.error || 'status ' + response.status);
+                    setVaultMsg('✓ Created ' + data.document.path + (data.document.indexed ? ' • indexed' : ' • index pending'));
+                    vaultComposing = false;
+                    document.getElementById('vaultComposeBar').style.display = 'none';
+                    loadVaultStats();
+                    loadVaultList();
+                    openVaultDoc(data.document.path);
+                } catch (error) {
+                    setVaultMsg('✗ Create failed: ' + error.message, true);
+                }
+                return;
+            }
+            if (!vaultCurrentPath) { setVaultMsg('No document selected', true); return; }
+            try {
+                const response = await fetch(GATEWAY_URL + '/api/memory/vault/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: vaultCurrentPath, content: content })
+                });
+                const data = await response.json();
+                if (!response.ok || data.status !== 'success') throw new Error(data.error || 'status ' + response.status);
+                setVaultMsg('✓ Saved ' + data.document.path + (data.document.indexed ? ' • re-indexed' : ' • index pending'));
+                loadVaultStats();
+                loadVaultList();
+            } catch (error) {
+                setVaultMsg('✗ Save failed: ' + error.message, true);
+            }
+        }
+        
+        function newVaultDoc() {
+            vaultCurrentPath = null;
+            vaultComposing = true;
+            document.getElementById('vaultEditorTitle').textContent = 'NEW DOCUMENT';
+            document.getElementById('vaultEditorMeta').textContent = 'Compose mode — pick category, title, write content, SAVE';
+            document.getElementById('vaultComposeBar').style.display = 'flex';
+            document.getElementById('vaultNewTitle').value = '';
+            const textarea = document.getElementById('vaultEditorTextarea');
+            textarea.value = '';
+            textarea.disabled = false;
+            textarea.focus();
+            setVaultMsg('');
+        }
+        
+        async function deleteVaultDoc() {
+            if (!vaultCurrentPath) { setVaultMsg('No document selected', true); return; }
+            if (!confirm('Delete ' + vaultCurrentPath + ' from the Memory Vault?')) return;
+            try {
+                const response = await fetch(GATEWAY_URL + '/api/memory/vault/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: vaultCurrentPath })
+                });
+                const data = await response.json();
+                if (!response.ok || data.status !== 'success') throw new Error(data.error || 'status ' + response.status);
+                setVaultMsg('✓ Deleted ' + (data.result && data.result.path ? data.result.path : 'document'));
+                vaultCurrentPath = null;
+                vaultComposing = false;
+                document.getElementById('vaultComposeBar').style.display = 'none';
+                document.getElementById('vaultEditorTitle').textContent = 'NO DOCUMENT';
+                document.getElementById('vaultEditorMeta').textContent = 'Select a document from the browser';
+                const textarea = document.getElementById('vaultEditorTextarea');
+                textarea.value = '';
+                textarea.disabled = true;
+                loadVaultStats();
+                loadVaultList();
+            } catch (error) {
+                setVaultMsg('✗ Delete failed: ' + error.message, true);
+            }
+        }
+        
+        async function reindexVault(force) {
+            setVaultMsg('Rebuilding semantic index...');
+            try {
+                const response = await fetch(GATEWAY_URL + '/api/memory/vault/reindex', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ force: !!force })
+                });
+                const data = await response.json();
+                if (!response.ok || data.status !== 'success') throw new Error(data.error || 'status ' + response.status);
+                const r = data.result || {};
+                setVaultMsg('✓ Reindex: ' + (r.embedded != null ? r.embedded + ' embedded, ' + r.skipped + ' skipped' : 'done'));
+                loadVaultStats();
+            } catch (error) {
+                setVaultMsg('✗ Reindex failed: ' + error.message, true);
+            }
+        }
+        
+        // Initialize Holodeck systems
+        initTaskFeed();
+        initVault();
+        
+        init();
+    </script>
+</body>
+</html>
